@@ -1,6 +1,7 @@
 import express, { Request, Response, NextFunction } from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
+import mongoose from "mongoose";
 import { config } from "./config";
 import { connectDB } from "./db";
 import { authRouter } from "./routes/auth";
@@ -18,9 +19,16 @@ import { MandiPriceService } from "./services/mandi";
 export const app = express();
 
 // Security, CORS & Middlewares
+const allowedOrigins = [
+  config.CLIENT_URL,
+  "http://localhost:3000",
+  "http://127.0.0.1:3000",
+  // Add production frontend URL when deployed
+];
+
 app.use(
   cors({
-    origin: [config.CLIENT_URL, "http://localhost:3000", "http://127.0.0.1:3000"],
+    origin: allowedOrigins,
     credentials: true,
   })
 );
@@ -50,14 +58,97 @@ app.use("/api/v1/enquiries", enquiryRouter);
 app.use("/api/v1/voice", voiceRouter);
 app.use("/api/v1/admin", adminRouter);
 
-// Base Health Check
-app.get("/api/v1/health", (_req: Request, res: Response) => {
-  res.status(200).json({
-    status: "ok",
-    service: "KrishiSetu Express API",
-    version: "1.0.0",
-    timestamp: new Date().toISOString(),
-  });
+// Base Health Check (public, no auth required)
+app.get("/api/v1/health", async (_req: Request, res: Response) => {
+  try {
+    const dbConnected = mongoose.connection.readyState === 1;
+    const dbName = dbConnected ? mongoose.connection.name : "not connected";
+    
+    res.status(200).json({
+      status: "ok",
+      service: "KrishiSetu Express API",
+      version: "1.0.0",
+      timestamp: new Date().toISOString(),
+      database: {
+        connected: dbConnected,
+        name: dbName,
+        state: mongoose.connection.readyState === 1 ? "connected" : 
+                mongoose.connection.readyState === 2 ? "connecting" : "disconnected"
+      },
+      environment: process.env.NODE_ENV || "development"
+    });
+  } catch (error) {
+    res.status(500).json({
+      status: "error",
+      message: "Health check failed",
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Public Integration Status Endpoint (no auth required)
+app.get("/api/v1/integrations/status", async (_req: Request, res: Response) => {
+  try {
+    const { config } = await import("./config");
+    const { sourceManager } = await import("./services/marketSources");
+    
+    const dbConnected = mongoose.connection.readyState === 1;
+    
+    const integrations = [
+      {
+        name: "MongoDB",
+        configured: Boolean(config.MONGODB_URI && config.MONGODB_URI !== "mongodb://127.0.0.1:27017/krishisetu"),
+        healthy: dbConnected,
+        message: dbConnected ? "Connected" : "Disconnected"
+      },
+      {
+        name: "data.gov.in",
+        configured: Boolean(config.DATA_GOV_IN_API_KEY),
+        healthy: false, // Would require actual health check
+        message: config.DATA_GOV_IN_API_KEY ? "Configured" : "Not configured"
+      },
+      {
+        name: "Gnani STT/TTS",
+        configured: Boolean(config.GNANI_API_KEY),
+        healthy: false, // Would require actual health check
+        message: config.GNANI_API_KEY ? "Configured" : "Not configured"
+      },
+      {
+        name: "MapTiler",
+        configured: Boolean(config.MAPTILER_API_KEY),
+        healthy: true, // Client-side only
+        message: config.MAPTILER_API_KEY ? "Configured" : "Using OSM fallback"
+      },
+      {
+        name: "Google Places",
+        configured: Boolean(config.GOOGLE_MAPS_API_KEY),
+        healthy: false,
+        message: config.GOOGLE_MAPS_API_KEY ? "Configured" : "Not configured"
+      },
+      {
+        name: "OpenRouter AI",
+        configured: Boolean(config.OPENROUTER_API_KEY),
+        healthy: false,
+        message: config.OPENROUTER_API_KEY ? "Configured" : "Not configured"
+      }
+    ];
+    
+    res.status(200).json({
+      success: true,
+      integrations,
+      summary: {
+        total: integrations.length,
+        configured: integrations.filter(i => i.configured).length,
+        healthy: integrations.filter(i => i.healthy).length
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    res.status(500).json({
+      success: false,
+      message: error.message || "Failed to fetch integration status"
+    });
+  }
 });
 
 // Centralized 404 Handler
@@ -76,20 +167,30 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
 });
 
 export async function startServer() {
-  await connectDB();
-  await MandiPriceService.removeDemonstrationRecords().catch(() => {});
+  try {
+    await connectDB();
+    await MandiPriceService.removeDemonstrationRecords().catch(() => {});
 
-  const server = app.listen(config.PORT, () => {
-    console.log(`🚀 [KrishiSetu Server] Listening at http://localhost:${config.PORT}`);
-    console.log(`📡 [API Base] http://localhost:${config.PORT}/api/v1`);
-  });
+    const server = app.listen(config.PORT, () => {
+      console.log(`🚀 [KrishiSetu Server] Listening at http://localhost:${config.PORT}`);
+      console.log(`📡 [API Base] http://localhost:${config.PORT}/api/v1`);
+      console.log(`🌐 [Client URL] ${config.CLIENT_URL}`);
+      console.log(`🏠 [Environment] ${config.NODE_ENV}`);
+    });
 
-  void MandiPriceService.syncLocalMarketPrices().then((syncResult) => {
-    console.log(`📈 [Mandi Sync] ${syncResult.status}: ${syncResult.recordsFetched} live records fetched.`);
-    if (syncResult.message) console.warn(`⚠️ [Mandi Sync] ${syncResult.message}`);
-  });
+    // Initial data sync (non-blocking)
+    void MandiPriceService.syncLocalMarketPrices().then((syncResult) => {
+      console.log(`📈 [Mandi Sync] ${syncResult.status}: ${syncResult.recordsFetched} live records fetched.`);
+      if (syncResult.message) console.warn(`⚠️ [Mandi Sync] ${syncResult.message}`);
+    }).catch((err) => {
+      console.warn(`⚠️ [Mandi Sync] Failed to sync initial data:`, err.message);
+    });
 
-  return server;
+    return server;
+  } catch (error) {
+    console.error("❌ [Server Startup] Failed to start server:", error);
+    process.exit(1);
+  }
 }
 
 if (process.env.NODE_ENV !== "test" && require.main === module) {

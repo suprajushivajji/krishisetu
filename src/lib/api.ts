@@ -2,10 +2,26 @@ export interface ApiResponse<T = any> {
   success: boolean;
   message?: string;
   data?: T;
+  status?: number;
   [key: string]: any;
 }
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/v1";
+const API_BASE = (() => {
+  const url = process.env.NEXT_PUBLIC_API_URL;
+  if (!url) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("NEXT_PUBLIC_API_URL is required in production. Set it in Vercel environment variables.");
+    }
+    console.warn("⚠️ NEXT_PUBLIC_API_URL not set, falling back to localhost (development only)");
+    return "http://localhost:4000/api/v1";
+  }
+  // Normalize URL: remove trailing slash and ensure /api/v1 suffix
+  const normalized = url.replace(/\/+$/, "");
+  if (!normalized.endsWith("/api/v1")) {
+    return `${normalized}/api/v1`;
+  }
+  return normalized;
+})();
 
 class ApiClient {
   private token: string | null = null;
@@ -62,8 +78,31 @@ class ApiClient {
         headers: this.getHeaders(),
         credentials: "include",
       });
+
+      if (!res.ok) {
+        const contentType = res.headers.get("content-type") || "";
+        let message = `HTTP ${res.status}: ${res.statusText}`;
+        if (contentType.includes("application/json")) {
+          try {
+            const errorData = await res.json();
+            message = errorData.message || message;
+          } catch {
+            // Ignore JSON parse errors
+          }
+        }
+        return { success: false, message, status: res.status };
+      }
+
+      const contentType = res.headers.get("content-type") || "";
+      if (!contentType.includes("application/json")) {
+        return { success: false, message: `Response is not JSON (Content-Type: ${contentType})` };
+      }
+
       return await res.json();
     } catch (err: any) {
+      if (err instanceof TypeError && err.message.includes("fetch")) {
+        return { success: false, message: "Network error: Backend server may be unreachable. Check NEXT_PUBLIC_API_URL configuration." };
+      }
       return { success: false, message: err.message || "Network request failed" };
     }
   }
@@ -76,9 +115,27 @@ class ApiClient {
         body: JSON.stringify(body || {}),
         credentials: "include",
       });
+
+      if (!res.ok) {
+        const contentType = res.headers.get("content-type") || "";
+        let message = `HTTP ${res.status}: ${res.statusText}`;
+        if (contentType.includes("application/json")) {
+          try {
+            const errorData = await res.json();
+            message = errorData.message || message;
+          } catch {
+            // Ignore JSON parse errors
+          }
+        }
+        return { success: false, message, status: res.status };
+      }
+
       const payload = await this.readJson(res);
       return payload ?? { success: res.ok, message: res.statusText };
     } catch (err: any) {
+      if (err instanceof TypeError && err.message.includes("fetch")) {
+        return { success: false, message: "Network error: Backend server may be unreachable. Check NEXT_PUBLIC_API_URL configuration." };
+      }
       return { success: false, message: err.message || "Network request failed" };
     }
   }
@@ -119,8 +176,31 @@ class ApiClient {
         body: JSON.stringify(body || {}),
         credentials: "include",
       });
+
+      if (!res.ok) {
+        const contentType = res.headers.get("content-type") || "";
+        let message = `HTTP ${res.status}: ${res.statusText}`;
+        if (contentType.includes("application/json")) {
+          try {
+            const errorData = await res.json();
+            message = errorData.message || message;
+          } catch {
+            // Ignore JSON parse errors
+          }
+        }
+        return { success: false, message, status: res.status };
+      }
+
+      const contentType = res.headers.get("content-type") || "";
+      if (!contentType.includes("application/json")) {
+        return { success: false, message: `Response is not JSON (Content-Type: ${contentType})` };
+      }
+
       return await res.json();
     } catch (err: any) {
+      if (err instanceof TypeError && err.message.includes("fetch")) {
+        return { success: false, message: "Network error: Backend server may be unreachable. Check NEXT_PUBLIC_API_URL configuration." };
+      }
       return { success: false, message: err.message || "Network request failed" };
     }
   }

@@ -23,6 +23,17 @@ const parsed = envSchema.safeParse(process.env);
 if (!parsed.success) {
   const missingKeys = parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("\n");
   console.warn("⚠️ [Config Warning] Environment validation issues:\n" + missingKeys);
+  
+  if (process.env.NODE_ENV === "production") {
+    const criticalErrors = parsed.error.issues.filter(
+      (i) => i.path.includes("JWT_SECRET") || i.path.includes("MONGODB_URI")
+    );
+    if (criticalErrors.length > 0) {
+      console.error("❌ [Config Error] Critical environment variables missing in production:");
+      criticalErrors.forEach((i) => console.error(`  - ${i.path.join(".")}: ${i.message}`));
+      process.exit(1);
+    }
+  }
 }
 
 export const config = parsed.success
