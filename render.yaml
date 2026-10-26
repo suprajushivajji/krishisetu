@@ -9,7 +9,7 @@ services:
       - key: NODE_ENV
         value: production
       - key: PORT
-        value: 4000
+        value: 10000
       - key: CLIENT_URL
         value: https://krishisetu.vercel.app
         sync: false

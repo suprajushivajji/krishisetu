@@ -171,20 +171,35 @@ export async function startServer() {
     await connectDB();
     await MandiPriceService.removeDemonstrationRecords().catch(() => {});
 
-    const server = app.listen(config.PORT, () => {
-      console.log(`🚀 [KrishiSetu Server] Listening at http://localhost:${config.PORT}`);
-      console.log(`📡 [API Base] http://localhost:${config.PORT}/api/v1`);
+    // Use Render's PORT or fall back to config.PORT
+    const port = process.env.PORT || config.PORT;
+    
+    const server = app.listen(port, "0.0.0.0", () => {
+      console.log(`🚀 [KrishiSetu Server] Listening on port ${port}`);
+      console.log(`📡 [API Base] http://localhost:${port}/api/v1`);
       console.log(`🌐 [Client URL] ${config.CLIENT_URL}`);
       console.log(`🏠 [Environment] ${config.NODE_ENV}`);
+      console.log(`✅ [Server Ready] HTTP server is accepting connections`);
     });
 
-    // Initial data sync (non-blocking)
-    void MandiPriceService.syncLocalMarketPrices().then((syncResult) => {
-      console.log(`📈 [Mandi Sync] ${syncResult.status}: ${syncResult.recordsFetched} live records fetched.`);
-      if (syncResult.message) console.warn(`⚠️ [Mandi Sync] ${syncResult.message}`);
-    }).catch((err) => {
-      console.warn(`⚠️ [Mandi Sync] Failed to sync initial data:`, err.message);
-    });
+    // Initial data sync (non-blocking, with timeout and error handling)
+    // This runs in the background and doesn't block server readiness
+    setTimeout(() => {
+      const syncPromise = MandiPriceService.syncLocalMarketPrices();
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error("Mandi sync timeout after 30s")), 30000)
+      );
+      
+      Promise.race([syncPromise, timeoutPromise])
+        .then((syncResult: any) => {
+          console.log(`📈 [Mandi Sync] ${syncResult.status}: ${syncResult.recordsFetched} live records fetched.`);
+          if (syncResult.message) console.warn(`⚠️ [Mandi Sync] ${syncResult.message}`);
+        })
+        .catch((err) => {
+          console.warn(`⚠️ [Mandi Sync] Failed to sync initial data:`, err.message);
+          console.log(`ℹ️  [Mandi Sync] Server is running, but initial data sync failed. Sync will retry on next scheduled job.`);
+        });
+    }, 2000); // Delay sync by 2s to let server start cleanly
 
     return server;
   } catch (error) {
