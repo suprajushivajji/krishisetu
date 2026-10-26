@@ -573,6 +573,7 @@ export default function Home() {
                     buyer={buyer}
                     quantity={quantity}
                     onContact={() => setSelectedBuyerForEnquiry(buyer)}
+                    currentUser={currentUser}
                   />
                 ))}
               </section>
@@ -955,7 +956,16 @@ function BuyersView({
   // Load mandi locations from CSV
   useEffect(() => {
     // Static mandi locations data (embedded to avoid path issues)
-    const mandiData = [
+    const mandiData: Array<{
+      record_id: number;
+      mandi_name: string;
+      district: string;
+      state: string;
+      price: number;
+      take_home: number;
+      latitude: number;
+      longitude: number;
+    }> = [
       { record_id: 1, mandi_name: "Mayabander Vegetable Market", district: "North and Middle Andaman", state: "Andaman and Nicobar Islands", price: 80, take_home: 39280, latitude: 12.924, longitude: 92.896 },
       { record_id: 2, mandi_name: "Manubazar", district: "South Tripura", state: "Tripura", price: 66, take_home: 32280, latitude: 23.045, longitude: 91.615 },
       { record_id: 3, mandi_name: "Gondatwisa APMC", district: "Dhalai", state: "Tripura", price: 65, take_home: 31780, latitude: 23.936, longitude: 91.857 },
@@ -1052,7 +1062,16 @@ function BuyersView({
               userLocation={mapCenter} // Pass user location for "YOU" marker
               markers={[
                 // Buyer markers
-                ...filtered.flatMap((buyer) => {
+                ...filtered.flatMap((buyer): Array<{
+                  lat: number;
+                  lng: number;
+                  title: string;
+                  description: string;
+                  isVerified: boolean;
+                  price: number;
+                  onClick: () => void;
+                  type: "buyer";
+                }> => {
                   if (!buyer.coordinates) return [];
                   return [{
                     lat: buyer.coordinates[1],
@@ -1066,7 +1085,15 @@ function BuyersView({
                   }];
                 }),
                 // Mandi location markers
-                ...mandiLocations.map((mandi) => ({
+                ...mandiLocations.map((mandi): {
+                  lat: number;
+                  lng: number;
+                  title: string;
+                  description: string;
+                  isVerified: boolean;
+                  price: number;
+                  type: "mandi";
+                } => ({
                   lat: mandi.latitude,
                   lng: mandi.longitude,
                   title: mandi.mandi_name,

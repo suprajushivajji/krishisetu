@@ -68,7 +68,7 @@ export class IntentRouter {
     }
 
     const quantityMatch = lower.match(/(\d+(?:\.\d+)?)\s*(kg|quintal|ton|kg|ಕಿಲೋ|ಕೆಜಿ)/i);
-    const quantity = quantityMatch ? this.normalizeToKg(Number(quantityMatch[1]), quantityMatch[2]) : undefined;
+    let quantity = quantityMatch ? this.normalizeToKg(Number(quantityMatch[1]), quantityMatch[2]) : undefined;
 
     const distanceMatch = lower.match(/(\d+(?:\.\d+)?)\s*(km|ಕಿಮೀ)/i);
     const distance = distanceMatch ? Number(distanceMatch[1]) : undefined;
@@ -434,6 +434,7 @@ export class IntentRouter {
         found: false,
         message: "Insufficient historical data for trend analysis",
         availableCount: prices.length,
+        observations: prices.length,
       };
     }
 
@@ -460,7 +461,7 @@ export class IntentRouter {
     // Check historical data sufficiency
     const trendResult = await this.getPriceTrend(crop, district, state);
 
-    if (!trendResult.found || trendResult.observations < 10) {
+    if (!trendResult.found || (trendResult.observations !== undefined && trendResult.observations < 10)) {
       return {
         sufficiencyStatus: "insufficient",
         message: "Insufficient historical data for reliable prediction",
