@@ -99,18 +99,36 @@ export function VoiceAssistantModal({
   const playTts = async (textToSpeak: string) => {
     try {
       setIsPlayingAudio(true);
-      if (typeof window !== "undefined" && "speechSynthesis" in window) {
+      
+      // Try browser speech synthesis for English, but for Kannada use Gnani directly
+      // Browser speech synthesis often doesn't support Kannada properly
+      if (language === "en" && typeof window !== "undefined" && "speechSynthesis" in window) {
         window.speechSynthesis.cancel();
         const utterance = new SpeechSynthesisUtterance(textToSpeak);
-        utterance.lang = language === "kn" ? "kn-IN" : "en-IN";
+        utterance.lang = "en-IN";
         utterance.rate = 1.08;
         utterance.pitch = 1;
         utterance.onend = () => setIsPlayingAudio(false);
-        utterance.onerror = () => setIsPlayingAudio(false);
+        utterance.onerror = () => {
+          // If browser synthesis fails, try Gnani
+          console.log("Browser speech synthesis failed, trying Gnani API");
+          playGnaniTts(textToSpeak);
+        };
         window.speechSynthesis.speak(utterance);
         return;
       }
 
+      // For Kannada or if browser synthesis fails, use Gnani API
+      await playGnaniTts(textToSpeak);
+    } catch (err: any) {
+      console.error("TTS error:", err);
+      setErrorMsg("Failed to play audio: " + err.message);
+      setIsPlayingAudio(false);
+    }
+  };
+
+  const playGnaniTts = async (textToSpeak: string) => {
+    try {
       const result = await api.synthesizeSpeech({
         text: textToSpeak,
         languageCode: language,
@@ -118,7 +136,7 @@ export function VoiceAssistantModal({
       });
 
       if (!result.success || !result.audioBlob) {
-        setErrorMsg(result.message || "Gnani did not return playable audio.");
+        setErrorMsg(result.message || "Voice service unavailable. Add GNANI_API_KEY to Render for Kannada voice support.");
         setIsPlayingAudio(false);
         return;
       }
@@ -135,7 +153,7 @@ export function VoiceAssistantModal({
         };
         player.onerror = () => {
           URL.revokeObjectURL(audioUrl);
-          setErrorMsg("The speech response was not a supported audio format.");
+          setErrorMsg("Audio playback failed. The speech response was not a supported audio format.");
           setIsPlayingAudio(false);
         };
         try {
@@ -145,7 +163,12 @@ export function VoiceAssistantModal({
           setIsPlayingAudio(false);
         }
       }
-    } catch {
+    } catch (err: any) {
+      console.error("Gnani TTS error:", err);
+      setErrorMsg("Voice service error: " + err.message);
+      setIsPlayingAudio(false);
+    }
+  };
       setErrorMsg("Could not connect to the speech service.");
       setIsPlayingAudio(false);
     }
