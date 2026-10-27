@@ -134,10 +134,13 @@ export class GnaniService {
 
     try {
       const normalizedLang = this.normalizeLanguageCode(languageCode);
+      // Use simple voice name for Kannada
+      const voiceName = "Nalini";
+      
       const payload = {
         model: "timbre-v2.5",
-        text,
-        voice: voice || "Nalini", // Nalini is officially validated for Kannada & Indian languages
+        text: text.trim(),
+        voice: voiceName,
         language_code: normalizedLang,
         audio_format: audioFormat,
       };

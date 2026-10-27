@@ -36,13 +36,13 @@ const upload = multer({
 
 const speakSchema = z.object({
   text: z.string().min(1, "Text is required to synthesize"),
-  languageCode: z.string().default("kn"),
+  languageCode: z.string().default("kn-IN"),
   voiceGender: z.enum(["female", "male"]).default("female"),
 });
 
 const assistantSchema = z.object({
   transcript: z.string().min(1, "Transcript is required"),
-  languageCode: z.string().default("kn"),
+  languageCode: z.string().default("kn-IN"),
   district: z.string().default("Davanagere"),
 });
 
@@ -119,7 +119,7 @@ voiceRouter.post(
  */
 voiceRouter.post("/speak", async (req: Request, res: Response): Promise<void> => {
   try {
-    const { text, languageCode = "kn", voiceGender = "female" } = req.body;
+    const { text, languageCode = "kn-IN", voiceGender = "female" } = req.body;
     if (!text) {
       res.status(400).json({ success: false, message: "Text to speak is required" });
       return;
@@ -155,7 +155,7 @@ voiceRouter.post("/speak", async (req: Request, res: Response): Promise<void> =>
  */
 voiceRouter.post("/assistant", async (req: Request, res: Response): Promise<void> => {
   try {
-    const { transcript, languageCode = "kn", district = "" } = req.body;
+    const { transcript, languageCode = "kn-IN", district = "" } = req.body;
 
     // Classify intent (now async to fetch crops from DB)
     const intentResult = await IntentRouter.classify(transcript, district, "Karnataka");
@@ -224,7 +224,7 @@ voiceRouter.post("/assistant", async (req: Request, res: Response): Promise<void
       transcript,
       intent: intentResult.intent,
       confidence: intentResult.confidence,
-      response: languageCode === "kn" ? answerTextKannada : answerText,
+      response: languageCode === "kn-IN" ? answerTextKannada : answerText,
       responseEnglish: answerText,
       responseKannada: answerTextKannada,
       data,

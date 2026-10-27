@@ -205,7 +205,7 @@ class ApiClient {
     }
   }
 
-  public async uploadAudio(audioBlob: Blob, languageCode = "kn"): Promise<ApiResponse> {
+  public async uploadAudio(audioBlob: Blob, languageCode = "kn-IN"): Promise<ApiResponse> {
     const formData = new FormData();
     formData.append("audio", audioBlob, "recording.wav");
     formData.append("languageCode", languageCode);

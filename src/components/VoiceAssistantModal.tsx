@@ -62,7 +62,8 @@ export function VoiceAssistantModal({
     setErrorMsg(null);
 
     // Call real Gnani STT endpoint
-    const sttResult = await api.uploadAudio(blob, language);
+    const languageCode = language === "kn" ? "kn-IN" : "en-IN";
+    const sttResult = await api.uploadAudio(blob, languageCode);
 
     if (sttResult.success && sttResult.transcript) {
       setTranscript(sttResult.transcript);
@@ -80,17 +81,17 @@ export function VoiceAssistantModal({
 
   const executeVoiceQuery = async (queryText: string) => {
     setLoading(true);
+    const languageCode = language === "kn" ? "kn-IN" : "en-IN";
     const res = await api.post("/voice/assistant", {
       transcript: queryText,
-      languageCode: language,
+      languageCode,
       district,
     });
 
     setLoading(false);
     if (res.success) {
       setResponse(res);
-      // Auto-trigger TTS if available
-      playTts(res.response);
+      // Don't auto-play - let user click play button
     } else {
       setErrorMsg(res.message || "Failed to process query.");
     }
@@ -98,78 +99,35 @@ export function VoiceAssistantModal({
 
   const playTts = async (textToSpeak: string) => {
     try {
+      // Cancel any previous audio immediately
+      if (typeof window !== "undefined" && "speechSynthesis" in window) {
+        window.speechSynthesis.cancel();
+      }
+      if (audioPlayerRef.current) {
+        audioPlayerRef.current.pause();
+        audioPlayerRef.current.currentTime = 0;
+      }
+      
       setIsPlayingAudio(true);
       
-      // Try browser speech synthesis for English, but for Kannada use Gnani directly
-      // Browser speech synthesis often doesn't support Kannada properly
-      if (language === "en" && typeof window !== "undefined" && "speechSynthesis" in window) {
-        window.speechSynthesis.cancel();
+      // Use browser synthesis for both languages
+      // For Kannada, use Hindi voice as fallback (closer to Kannada than English)
+      if (typeof window !== "undefined" && "speechSynthesis" in window) {
         const utterance = new SpeechSynthesisUtterance(textToSpeak);
-        utterance.lang = "en-IN";
-        utterance.rate = 1.08;
-        utterance.pitch = 1;
+        utterance.lang = language === "kn" ? "hi-IN" : "en-IN";
+        utterance.rate = 0.9;
+        utterance.pitch = 1.0;
+        utterance.volume = 1.0;
         utterance.onend = () => setIsPlayingAudio(false);
-        utterance.onerror = () => {
-          // If browser synthesis fails, try Gnani
-          console.log("Browser speech synthesis failed, trying Gnani API");
-          playGnaniTts(textToSpeak);
-        };
+        utterance.onerror = () => setIsPlayingAudio(false);
         window.speechSynthesis.speak(utterance);
-        return;
+      } else {
+        setIsPlayingAudio(false);
+        setErrorMsg("Speech synthesis not supported in this browser");
       }
-
-      // For Kannada or if browser synthesis fails, use Gnani API
-      await playGnaniTts(textToSpeak);
     } catch (err: any) {
       console.error("TTS error:", err);
       setErrorMsg("Failed to play audio: " + err.message);
-      setIsPlayingAudio(false);
-    }
-  };
-
-  const playGnaniTts = async (textToSpeak: string) => {
-    try {
-      const result = await api.synthesizeSpeech({
-        text: textToSpeak,
-        languageCode: language,
-        voiceGender: "female",
-      });
-
-      if (!result.success || !result.audioBlob) {
-        setErrorMsg(result.message || "Voice service unavailable. Add GNANI_API_KEY to Render for Kannada voice support.");
-        setIsPlayingAudio(false);
-        return;
-      }
-
-      const audioUrl = URL.createObjectURL(result.audioBlob);
-      if (audioPlayerRef.current) {
-        const player = audioPlayerRef.current;
-        player.pause();
-        player.src = audioUrl;
-        player.load();
-        player.onended = () => {
-          URL.revokeObjectURL(audioUrl);
-          setIsPlayingAudio(false);
-        };
-        player.onerror = () => {
-          URL.revokeObjectURL(audioUrl);
-          setErrorMsg("Audio playback failed. The speech response was not a supported audio format.");
-          setIsPlayingAudio(false);
-        };
-        try {
-          await player.play();
-        } catch {
-          setErrorMsg("Audio is ready. Press Replay Speech to allow playback in this browser.");
-          setIsPlayingAudio(false);
-        }
-      }
-    } catch (err: any) {
-      console.error("Gnani TTS error:", err);
-      setErrorMsg("Voice service error: " + err.message);
-      setIsPlayingAudio(false);
-    }
-  };
-      setErrorMsg("Could not connect to the speech service.");
       setIsPlayingAudio(false);
     }
   };
