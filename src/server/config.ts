@@ -26,11 +26,23 @@ if (!parsed.success) {
   
   if (process.env.NODE_ENV === "production") {
     const criticalErrors = parsed.error.issues.filter(
-      (i) => i.path.includes("JWT_SECRET") || i.path.includes("MONGODB_URI")
+      (i) => i.path.includes("JWT_SECRET") || i.path.includes("MONGODB_URI") || i.path.includes("CLIENT_URL")
     );
     if (criticalErrors.length > 0) {
       console.error("❌ [Config Error] Critical environment variables missing in production:");
       criticalErrors.forEach((i) => console.error(`  - ${i.path.join(".")}: ${i.message}`));
+      process.exit(1);
+    }
+  }
+  
+  // Additional production checks for fallback values
+  if (process.env.NODE_ENV === "production") {
+    if (!process.env.MONGODB_URI || process.env.MONGODB_URI === "mongodb://127.0.0.1:27017/krishisetu") {
+      console.error("❌ [Config Error] MONGODB_URI is not set or using localhost fallback in production");
+      process.exit(1);
+    }
+    if (!process.env.CLIENT_URL || process.env.CLIENT_URL === "http://localhost:3000") {
+      console.error("❌ [Config Error] CLIENT_URL is not set or using localhost fallback in production");
       process.exit(1);
     }
   }
