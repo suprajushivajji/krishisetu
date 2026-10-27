@@ -172,7 +172,7 @@ export async function startServer() {
     await MandiPriceService.removeDemonstrationRecords().catch(() => {});
 
     // Use Render's PORT or fall back to config.PORT
-    const port = process.env.PORT || config.PORT;
+    const port = Number(process.env.PORT) || config.PORT;
     
     const server = app.listen(port, "0.0.0.0", () => {
       console.log(`🚀 [KrishiSetu Server] Listening on port ${port}`);
