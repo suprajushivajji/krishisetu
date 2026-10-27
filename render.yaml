@@ -11,7 +11,7 @@ services:
       - key: PORT
         value: 10000
       - key: CLIENT_URL
-        value: https://krishisetu.vercel.app
+        value: https://krishisetu-v1.vercel.app
         sync: false
       - key: MONGODB_URI
         sync: false

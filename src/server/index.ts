@@ -23,7 +23,7 @@ const allowedOrigins = [
   config.CLIENT_URL,
   "http://localhost:3000",
   "http://127.0.0.1:3000",
-  "https://krishisetu.vercel.app", // Production Vercel frontend
+  "https://krishisetu-v1.vercel.app", // Production Vercel frontend
 ];
 
 app.use(
