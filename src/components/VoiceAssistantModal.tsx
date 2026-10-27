@@ -69,8 +69,8 @@ export function VoiceAssistantModal({
       await executeVoiceQuery(sttResult.transcript);
     } else {
       // If Gnani API key is not configured or upstream returned unconfigured notice
-      if (sttResult.message?.includes("GNANI_API_KEY")) {
-        setErrorMsg("⚠️ [Gnani Speech Integration] " + sttResult.message);
+      if (sttResult.message?.includes("GNANI_API_KEY") || sttResult.message?.includes("503")) {
+        setErrorMsg("⚠️ Voice service not configured. Add GNANI_API_KEY to Render environment variables to enable Kannada/English voice features. You can type your question below.");
       } else {
         setErrorMsg(sttResult.message || "Could not transcribe audio. You can also type your question below.");
       }
