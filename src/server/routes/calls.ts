@@ -1,7 +1,7 @@
 import { Router, Request, Response } from "express";
 import { z } from "zod";
 import { CallSession } from "../models/CallSession";
-import { authenticate, AuthenticatedRequest } from "../middleware/auth";
+import { authenticate, optionalAuthenticate, AuthenticatedRequest } from "../middleware/auth";
 import { OpenRouterService } from "../services/openrouter";
 import { IntentRouter } from "../services/intentRouter";
 
@@ -13,7 +13,7 @@ function generateSessionId(): string {
 }
 
 // POST /api/v1/calls - Create a new call session
-callsRouter.post("/", authenticate, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+callsRouter.post("/", optionalAuthenticate, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const { language = "kn-IN", mode = "in_app", district = "", state = "Karnataka" } = req.body;
 
@@ -53,7 +53,7 @@ callsRouter.post("/", authenticate, async (req: AuthenticatedRequest, res: Respo
 });
 
 // POST /api/v1/calls/:sessionId/start - Start the call
-callsRouter.post("/:sessionId/start", authenticate, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+callsRouter.post("/:sessionId/start", optionalAuthenticate, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const { sessionId } = req.params;
 
@@ -86,7 +86,7 @@ callsRouter.post("/:sessionId/start", authenticate, async (req: AuthenticatedReq
 });
 
 // POST /api/v1/calls/:sessionId/end - End the call
-callsRouter.post("/:sessionId/end", authenticate, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+callsRouter.post("/:sessionId/end", optionalAuthenticate, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const { sessionId } = req.params;
     const { finalTranscript, summary } = req.body;
@@ -216,7 +216,7 @@ callsRouter.get("/:sessionId/transcript", authenticate, async (req: Authenticate
 });
 
 // POST /api/v1/calls/:sessionId/transcript/segment - Add transcript segment
-callsRouter.post("/:sessionId/transcript/segment", authenticate, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+callsRouter.post("/:sessionId/transcript/segment", optionalAuthenticate, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const { sessionId } = req.params;
     const { speaker, text, language, isFinal = false, confidence } = req.body;
@@ -257,7 +257,7 @@ callsRouter.post("/:sessionId/transcript/segment", authenticate, async (req: Aut
 });
 
 // POST /api/v1/calls/:sessionId/send-transcript - Send transcript via messaging
-callsRouter.post("/:sessionId/send-transcript", authenticate, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+callsRouter.post("/:sessionId/send-transcript", optionalAuthenticate, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const { sessionId } = req.params;
     const { provider, recipientPhone, message } = req.body;
@@ -320,7 +320,7 @@ callsRouter.post("/:sessionId/send-transcript", authenticate, async (req: Authen
 });
 
 // POST /api/v1/calls/:sessionId/consent - Give consent for transcript delivery
-callsRouter.post("/:sessionId/consent", authenticate, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+callsRouter.post("/:sessionId/consent", optionalAuthenticate, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const { sessionId } = req.params;
 
@@ -350,7 +350,7 @@ callsRouter.post("/:sessionId/consent", authenticate, async (req: AuthenticatedR
 });
 
 // POST /api/v1/calls/:sessionId/generate-summary - Generate call summary using LLM
-callsRouter.post("/:sessionId/generate-summary", authenticate, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+callsRouter.post("/:sessionId/generate-summary", optionalAuthenticate, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const { sessionId } = req.params;
 

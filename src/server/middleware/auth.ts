@@ -54,6 +54,24 @@ export async function authenticate(
   }
 }
 
+/** Authenticate when credentials are supplied, but allow anonymous access. */
+export async function optionalAuthenticate(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  const hasBearerToken = typeof req.headers.authorization === "string"
+    && req.headers.authorization.startsWith("Bearer ");
+  const hasCookieToken = Boolean(req.cookies?.token);
+
+  if (!hasBearerToken && !hasCookieToken) {
+    next();
+    return;
+  }
+
+  await authenticate(req, res, next);
+}
+
 export function authorizeRoles(...roles: UserRole[]) {
   return (req: AuthenticatedRequest, res: Response, next: NextFunction): void => {
     if (!req.user) {
