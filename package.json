@@ -9,6 +9,8 @@
     "start": "next start",
     "start:server": "tsx src/server/index.ts",
     "test": "tsx tests/calculator.test.ts",
+    "test:voice": "tsx tests/voice-registration.test.ts",
+    "test:all": "tsx tests/calculator.test.ts && tsx tests/voice-registration.test.ts",
     "lint": "eslint"
   },
   "dependencies": {

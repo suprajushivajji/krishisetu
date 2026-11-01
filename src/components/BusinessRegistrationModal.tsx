@@ -1,52 +1,22 @@
 "use client";
 
-import { useState } from "react";
-import { Sprout, Building2, MapPin, Truck, IndianRupee, ShieldCheck, CheckCircle2, AlertCircle } from "lucide-react";
+import { useRef, useState } from "react";
+import { Sprout, Building2, MapPin, Mic, Keyboard, CheckCircle2, AlertCircle } from "lucide-react";
 import { api } from "@/lib/api";
+import {
+  CATEGORIES,
+  CROPS_LIST,
+  DISTRICTS_KARNATAKA,
+  buildBusinessPayload,
+  initialRegistrationState,
+  validateForm,
+  type RegistrationFormState,
+  type TransportPreference,
+  type ServiceCoverage,
+} from "@/lib/registrationSchema";
+import { VoiceRegistrationModal } from "./VoiceRegistrationModal";
 
-const CATEGORIES = [
-  { id: "local_vendor", label: "Local Vendor / Mandi Agent" },
-  { id: "wholesaler", label: "Wholesale Trader" },
-  { id: "retailer", label: "Retail Chain / Supermarket" },
-  { id: "distributor", label: "Distributor" },
-  { id: "processor", label: "Food Processing Plant" },
-  { id: "exporter", label: "Agri Exporter" },
-  { id: "cooperative", label: "Farmers Cooperative / Society" },
-  { id: "fpo", label: "Farmer Producer Organization (FPO)" },
-  { id: "bulk_purchaser", label: "Bulk Institution / HoReCa" },
-];
-
-const CROPS_LIST = [
-  "Tomato",
-  "Onion",
-  "Potato",
-  "Green Chilli",
-  "Maize",
-  "Ragi",
-  "Cotton",
-  "Turmeric",
-  "Ginger",
-  "Arecanut",
-  "Coconut",
-  "Banana",
-];
-
-const DISTRICTS_KARNATAKA = [
-  "Davanagere",
-  "Harihar",
-  "Dharwad",
-  "Hubballi",
-  "Belagavi",
-  "Kolar",
-  "Chitradurga",
-  "Shivamogga",
-  "Haveri",
-  "Bellary",
-  "Mandya",
-  "Mysuru",
-  "Tumakuru",
-  "Bengaluru Rural",
-];
+type Mode = "choose" | "manual" | "voice";
 
 export function BusinessRegistrationModal({
   isOpen,
@@ -57,44 +27,32 @@ export function BusinessRegistrationModal({
   onClose: () => void;
   onSuccess?: () => void;
 }) {
+  const [mode, setMode] = useState<Mode>("choose");
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
-  // Form State
-  const [businessName, setBusinessName] = useState("");
-  const [category, setCategory] = useState("wholesaler");
-  const [contactPerson, setContactPerson] = useState("");
-  const [phone, setPhone] = useState("");
-  const [email, setEmail] = useState("");
-  const [address, setAddress] = useState("");
-  const [locality, setLocality] = useState("");
-  const [taluk, setTaluk] = useState("");
-  const [district, setDistrict] = useState("Davanagere");
-  const [state, setState] = useState("Karnataka");
-  const [pincode, setPincode] = useState("577002");
-  const [latitude, setLatitude] = useState(14.4644);
-  const [longitude, setLongitude] = useState(75.9218);
+  // Single source of truth for the whole registration (shared with the voice agent).
+  const [form, setForm] = useState<RegistrationFormState>({ ...initialRegistrationState });
 
-  const [selectedCrops, setSelectedCrops] = useState<string[]>(["Tomato"]);
-  const [minQuantityKg, setMinQuantityKg] = useState(100);
-  const [maxQuantityKg, setMaxQuantityKg] = useState(5000);
-  const [transportPreference, setTransportPreference] = useState<"pickup" | "delivery" | "both">("pickup");
-  const [serviceCoverage, setServiceCoverage] = useState<"village" | "taluk" | "district" | "multiple_districts" | "statewide">("district");
-  const [paymentTerms, setPaymentTerms] = useState("Immediate Cash/UPI upon pickup");
-  const [description, setDescription] = useState("");
-  const [consentToPublish, setConsentToPublish] = useState(true);
+  // Prevent duplicate submissions from producing duplicate business records.
+  const submittingRef = useRef(false);
 
   if (!isOpen) return null;
 
+  const set = <K extends keyof RegistrationFormState>(key: K, value: RegistrationFormState[K]) =>
+    setForm((prev) => ({ ...prev, [key]: value }));
+
   const toggleCrop = (crop: string) => {
-    if (selectedCrops.includes(crop)) {
-      if (selectedCrops.length > 1) {
-        setSelectedCrops(selectedCrops.filter((c) => c !== crop));
+    setForm((prev) => {
+      if (prev.selectedCrops.includes(crop)) {
+        if (prev.selectedCrops.length > 1) {
+          return { ...prev, selectedCrops: prev.selectedCrops.filter((c) => c !== crop) };
+        }
+        return prev;
       }
-    } else {
-      setSelectedCrops([...selectedCrops, crop]);
-    }
+      return { ...prev, selectedCrops: [...prev.selectedCrops, crop] };
+    });
   };
 
   const handleUseCurrentLocation = () => {
@@ -104,8 +62,11 @@ export function BusinessRegistrationModal({
     }
     navigator.geolocation.getCurrentPosition(
       (pos) => {
-        setLatitude(Number(pos.coords.latitude.toFixed(6)));
-        setLongitude(Number(pos.coords.longitude.toFixed(6)));
+        setForm((prev) => ({
+          ...prev,
+          latitude: Number(pos.coords.latitude.toFixed(6)),
+          longitude: Number(pos.coords.longitude.toFixed(6)),
+        }));
         setMessage({ type: "success", text: "GPS Coordinates populated for business location." });
       },
       () => {
@@ -114,41 +75,27 @@ export function BusinessRegistrationModal({
     );
   };
 
-  const handleSubmit = async (isDraft = false) => {
+  // Core submission — used by BOTH manual and voice flows through the SAME API.
+  const submitBusiness = async (isDraft = false): Promise<{ success: boolean; message?: string }> => {
+    if (submittingRef.current) {
+      return { success: false, message: "A submission is already in progress." };
+    }
+    // Final deterministic validation across the entire form.
+    const errors = validateForm(form);
+    if (!isDraft && errors.length > 0) {
+      const msg = `Please fix: ${errors.map((e) => e.fieldId).join(", ")}`;
+      setMessage({ type: "error", text: msg });
+      return { success: false, message: msg };
+    }
+
+    submittingRef.current = true;
     setLoading(true);
     setMessage(null);
 
-    const payload = {
-      businessName,
-      category,
-      contactPerson,
-      phone,
-      email,
-      address,
-      locality,
-      taluk,
-      district,
-      state,
-      pincode,
-      latitude,
-      longitude,
-      cropsPurchased: selectedCrops,
-      minQuantityKg,
-      maxQuantityKg,
-      preferredUnit: "kg",
-      procurementFrequency: "daily",
-      transportPreference,
-      serviceCoverage,
-      serviceDistricts: [district],
-      paymentMethods: ["Cash", "UPI"],
-      paymentTerms,
-      description,
-      consentToPublish,
-      isDraft,
-    };
-
+    const payload = buildBusinessPayload(form, isDraft);
     const res = await api.post("/businesses", payload);
     setLoading(false);
+    submittingRef.current = false;
 
     if (res.success) {
       setMessage({
@@ -161,12 +108,49 @@ export function BusinessRegistrationModal({
         if (onSuccess) onSuccess();
         onClose();
       }, 1800);
-    } else {
-      setMessage({ type: "error", text: res.message || "Failed to register business. Please verify all inputs." });
+      return { success: true };
     }
+    const errMsg = res.message || "Failed to register business. Please verify all inputs.";
+    setMessage({ type: "error", text: errMsg });
+    return { success: false, message: errMsg };
   };
 
-  return (
+  // ---------------------------------------------------------------- mode chooser
+  if (mode === "choose") {
+    return (
+      <div className="modal-backdrop">
+        <div className="modal-container">
+          <div className="modal-header">
+            <div>
+              <span className="modal-badge">
+                <Building2 size={14} /> REGISTER BUSINESS
+              </span>
+              <h2>Register Your Agri Business</h2>
+              <p>Connect with farmers across Karnataka & receive direct crop availability.</p>
+            </div>
+            <button className="icon-btn" onClick={onClose} aria-label="Close modal">✕</button>
+          </div>
+          <div className="modal-body">
+            <div className="reg-mode-grid">
+              <button className="reg-mode-card" onClick={() => setMode("manual")}>
+                <Keyboard size={26} />
+                <strong>Fill form manually</strong>
+                <span>Type your business details across the three steps.</span>
+              </button>
+              <button className="reg-mode-card accent" onClick={() => setMode("voice")}>
+                <Mic size={26} />
+                <strong>Fill form by voice</strong>
+                <span>Answer questions aloud in Kannada, Hindi or English.</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ---------------------------------------------------------------- manual form
+  const manualBody = (
     <div className="modal-backdrop">
       <div className="modal-container">
         <div className="modal-header">
@@ -177,9 +161,7 @@ export function BusinessRegistrationModal({
             <h2>Register Your Agri Business</h2>
             <p>Connect with farmers across Karnataka & receive direct crop availability.</p>
           </div>
-          <button className="icon-btn" onClick={onClose} aria-label="Close modal">
-            ✕
-          </button>
+          <button className="icon-btn" onClick={onClose} aria-label="Close modal">✕</button>
         </div>
 
         {message && (
@@ -190,72 +172,46 @@ export function BusinessRegistrationModal({
         )}
 
         <div className="modal-body">
+          <div className="reg-mode-switch">
+            <button className="text-link" onClick={() => setMode("voice")}>
+              <Mic size={13} /> Register by voice instead
+            </button>
+          </div>
+
           {step === 1 && (
             <div className="form-step">
               <h3>1. Business & Contact Information</h3>
               <div className="form-group">
                 <label>Business Name *</label>
-                <input
-                  type="text"
-                  placeholder="e.g. Sahaja Fresh Foods / Ravi Wholesale"
-                  value={businessName}
-                  onChange={(e) => setBusinessName(e.target.value)}
-                  required
-                />
+                <input type="text" placeholder="e.g. Sahaja Fresh Foods / Ravi Wholesale" value={form.businessName} onChange={(e) => set("businessName", e.target.value)} required />
               </div>
 
               <div className="form-row">
                 <div className="form-group">
                   <label>Business Category *</label>
-                  <select value={category} onChange={(e) => setCategory(e.target.value)}>
-                    {CATEGORIES.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.label}
-                      </option>
-                    ))}
+                  <select value={form.category} onChange={(e) => set("category", e.target.value)}>
+                    {CATEGORIES.map((c) => (<option key={c.id} value={c.id}>{c.label}</option>))}
                   </select>
                 </div>
                 <div className="form-group">
                   <label>Contact Person Name *</label>
-                  <input
-                    type="text"
-                    placeholder="Owner / Procurement Manager"
-                    value={contactPerson}
-                    onChange={(e) => setContactPerson(e.target.value)}
-                    required
-                  />
+                  <input type="text" placeholder="Owner / Procurement Manager" value={form.contactPerson} onChange={(e) => set("contactPerson", e.target.value)} required />
                 </div>
               </div>
 
               <div className="form-row">
                 <div className="form-group">
                   <label>Phone Number * (10-digit Indian Mobile)</label>
-                  <input
-                    type="tel"
-                    placeholder="e.g. 9845012345"
-                    value={phone}
-                    onChange={(e) => setPhone(e.target.value)}
-                    required
-                  />
+                  <input type="tel" placeholder="e.g. 9845012345" value={form.phone} onChange={(e) => set("phone", e.target.value)} required />
                 </div>
                 <div className="form-group">
                   <label>Email Address (Optional)</label>
-                  <input
-                    type="email"
-                    placeholder="contact@business.com"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                  />
+                  <input type="email" placeholder="contact@business.com" value={form.email} onChange={(e) => set("email", e.target.value)} />
                 </div>
               </div>
 
               <div className="modal-actions">
-                <button
-                  type="button"
-                  className="primary-button"
-                  disabled={!businessName || !contactPerson || !phone}
-                  onClick={() => setStep(2)}
-                >
+                <button type="button" className="primary-button" disabled={!form.businessName || !form.contactPerson || !form.phone} onClick={() => setStep(2)}>
                   Continue to Location →
                 </button>
               </div>
@@ -267,50 +223,30 @@ export function BusinessRegistrationModal({
               <h3>2. Physical Location & Service Coverage</h3>
               <div className="form-group">
                 <label>Address / Mandi Shop Number *</label>
-                <input
-                  type="text"
-                  placeholder="Shop No. 14, APMC Yard, PB Road"
-                  value={address}
-                  onChange={(e) => setAddress(e.target.value)}
-                  required
-                />
+                <input type="text" placeholder="Shop No. 14, APMC Yard, PB Road" value={form.address} onChange={(e) => set("address", e.target.value)} required />
               </div>
 
               <div className="form-row">
                 <div className="form-group">
                   <label>District *</label>
-                  <select value={district} onChange={(e) => setDistrict(e.target.value)}>
-                    {DISTRICTS_KARNATAKA.map((d) => (
-                      <option key={d} value={d}>
-                        {d}
-                      </option>
-                    ))}
+                  <select value={form.district} onChange={(e) => set("district", e.target.value)}>
+                    {DISTRICTS_KARNATAKA.map((d) => (<option key={d} value={d}>{d}</option>))}
                   </select>
                 </div>
                 <div className="form-group">
                   <label>State *</label>
-                  <input type="text" value={state} onChange={(e) => setState(e.target.value)} />
+                  <input type="text" value={form.state} onChange={(e) => set("state", e.target.value)} />
                 </div>
               </div>
 
               <div className="form-row">
                 <div className="form-group">
                   <label>Taluk / Locality</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. Harihar / Davanagere"
-                    value={taluk}
-                    onChange={(e) => setTaluk(e.target.value)}
-                  />
+                  <input type="text" placeholder="e.g. Harihar / Davanagere" value={form.taluk} onChange={(e) => set("taluk", e.target.value)} />
                 </div>
                 <div className="form-group">
                   <label>PIN Code</label>
-                  <input
-                    type="text"
-                    placeholder="577002"
-                    value={pincode}
-                    onChange={(e) => setPincode(e.target.value)}
-                  />
+                  <input type="text" placeholder="577002" value={form.pincode} onChange={(e) => set("pincode", e.target.value)} />
                 </div>
               </div>
 
@@ -319,20 +255,15 @@ export function BusinessRegistrationModal({
                   <MapPin size={18} />
                   <div>
                     <strong>Business GPS Coordinates (2dsphere index)</strong>
-                    <span>Lat: {latitude}, Lng: {longitude}</span>
+                    <span>Lat: {form.latitude}, Lng: {form.longitude}</span>
                   </div>
                 </div>
-                <button type="button" className="outline-button" onClick={handleUseCurrentLocation}>
-                  Fetch GPS Location
-                </button>
+                <button type="button" className="outline-button" onClick={handleUseCurrentLocation}>Fetch GPS Location</button>
               </div>
 
               <div className="form-group">
                 <label>Service Area Coverage</label>
-                <select
-                  value={serviceCoverage}
-                  onChange={(e) => setServiceCoverage(e.target.value as any)}
-                >
+                <select value={form.serviceCoverage} onChange={(e) => set("serviceCoverage", e.target.value as ServiceCoverage)}>
                   <option value="taluk">Local Taluk only</option>
                   <option value="district">Whole District</option>
                   <option value="multiple_districts">Neighboring Districts</option>
@@ -341,15 +272,8 @@ export function BusinessRegistrationModal({
               </div>
 
               <div className="modal-actions split">
-                <button type="button" className="outline-button" onClick={() => setStep(1)}>
-                  ← Back
-                </button>
-                <button
-                  type="button"
-                  className="primary-button"
-                  disabled={!address}
-                  onClick={() => setStep(3)}
-                >
+                <button type="button" className="outline-button" onClick={() => setStep(1)}>← Back</button>
+                <button type="button" className="primary-button" disabled={!form.address} onClick={() => setStep(3)}>
                   Continue to Crops & Offers →
                 </button>
               </div>
@@ -363,12 +287,7 @@ export function BusinessRegistrationModal({
                 <label>Select Crops You Purchase *</label>
                 <div className="chips-container">
                   {CROPS_LIST.map((crop) => (
-                    <button
-                      key={crop}
-                      type="button"
-                      className={`chip-button ${selectedCrops.includes(crop) ? "active" : ""}`}
-                      onClick={() => toggleCrop(crop)}
-                    >
+                    <button key={crop} type="button" className={`chip-button ${form.selectedCrops.includes(crop) ? "active" : ""}`} onClick={() => toggleCrop(crop)}>
                       <Sprout size={13} /> {crop}
                     </button>
                   ))}
@@ -378,29 +297,18 @@ export function BusinessRegistrationModal({
               <div className="form-row">
                 <div className="form-group">
                   <label>Min Purchase Qty (kg)</label>
-                  <input
-                    type="number"
-                    value={minQuantityKg}
-                    onChange={(e) => setMinQuantityKg(Number(e.target.value))}
-                  />
+                  <input type="number" value={form.minQuantityKg} onChange={(e) => set("minQuantityKg", Number(e.target.value))} />
                 </div>
                 <div className="form-group">
                   <label>Max Daily Capacity (kg)</label>
-                  <input
-                    type="number"
-                    value={maxQuantityKg}
-                    onChange={(e) => setMaxQuantityKg(Number(e.target.value))}
-                  />
+                  <input type="number" value={form.maxQuantityKg} onChange={(e) => set("maxQuantityKg", Number(e.target.value))} />
                 </div>
               </div>
 
               <div className="form-row">
                 <div className="form-group">
                   <label>Transport & Pickup Preference</label>
-                  <select
-                    value={transportPreference}
-                    onChange={(e) => setTransportPreference(e.target.value as any)}
-                  >
+                  <select value={form.transportPreference} onChange={(e) => set("transportPreference", e.target.value as TransportPreference)}>
                     <option value="pickup">Farm Gate Pickup Available</option>
                     <option value="delivery">Farmer Delivery to Mandi / Yard</option>
                     <option value="both">Both Options Negotiable</option>
@@ -408,55 +316,25 @@ export function BusinessRegistrationModal({
                 </div>
                 <div className="form-group">
                   <label>Payment Terms & Schedule</label>
-                  <input
-                    type="text"
-                    value={paymentTerms}
-                    onChange={(e) => setPaymentTerms(e.target.value)}
-                  />
+                  <input type="text" value={form.paymentTerms} onChange={(e) => set("paymentTerms", e.target.value)} />
                 </div>
               </div>
 
               <div className="form-group">
                 <label>Business Description / Quality Requirements</label>
-                <textarea
-                  rows={2}
-                  placeholder="e.g. Regular buyers of hybrid tomatoes. Immediate electronic settlement on weighing."
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                />
+                <textarea rows={2} placeholder="e.g. Regular buyers of hybrid tomatoes. Immediate electronic settlement on weighing." value={form.description} onChange={(e) => set("description", e.target.value)} />
               </div>
 
               <div className="form-checkbox">
-                <input
-                  type="checkbox"
-                  id="consent"
-                  checked={consentToPublish}
-                  onChange={(e) => setConsentToPublish(e.target.checked)}
-                />
-                <label htmlFor="consent">
-                  I consent to publishing this business listing so verified farmers in Karnataka can find and send crop enquiries.
-                </label>
+                <input type="checkbox" id="consent" checked={form.consentToPublish} onChange={(e) => set("consentToPublish", e.target.checked)} />
+                <label htmlFor="consent">I consent to publishing this business listing so verified farmers in Karnataka can find and send crop enquiries.</label>
               </div>
 
               <div className="modal-actions split">
-                <button type="button" className="outline-button" onClick={() => setStep(2)}>
-                  ← Back
-                </button>
+                <button type="button" className="outline-button" onClick={() => setStep(2)}>← Back</button>
                 <div className="btn-group">
-                  <button
-                    type="button"
-                    className="outline-button"
-                    disabled={loading}
-                    onClick={() => handleSubmit(true)}
-                  >
-                    Save Draft
-                  </button>
-                  <button
-                    type="button"
-                    className="primary-button"
-                    disabled={loading || selectedCrops.length === 0}
-                    onClick={() => handleSubmit(false)}
-                  >
+                  <button type="button" className="outline-button" disabled={loading} onClick={() => submitBusiness(true)}>Save Draft</button>
+                  <button type="button" className="primary-button" disabled={loading || form.selectedCrops.length === 0} onClick={() => submitBusiness(false)}>
                     {loading ? "Submitting..." : "Submit for Verification ✓"}
                   </button>
                 </div>
@@ -465,6 +343,22 @@ export function BusinessRegistrationModal({
           )}
         </div>
       </div>
+
+            {/* Mounted only while in voice mode so the conversation machine restarts
+          fresh from the latest form values every time voice is chosen. */}
+      {mode === "voice" && (
+        <VoiceRegistrationModal
+          isOpen
+          initialForm={form}
+          onFormChange={(next) => setForm(next)}
+          onSwitchToManual={() => setMode("manual")}
+          onSubmit={() => submitBusiness(false)}
+          onClose={() => setMode("choose")}
+          submitting={loading}
+        />
+      )}
     </div>
   );
+
+  return manualBody;
 }

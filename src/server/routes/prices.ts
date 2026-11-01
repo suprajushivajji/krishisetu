@@ -63,73 +63,38 @@ const netReturnSchema = z.object({
 
 /**
  * GET /api/v1/prices
- * Query Mandi benchmark records with statewide discovery
+ * Query Mandi benchmark records
  */
 priceRouter.get("/", async (req: Request, res: Response): Promise<void> => {
   try {
-    const { crop, district, state, sortBy = "date", limit = 50 } = req.query;
+    const { crop, district, state } = req.query;
     const lat = req.query.lat ? Number(req.query.lat) : null;
     const lng = req.query.lng ? Number(req.query.lng) : null;
-    const limitNum = Math.min(Number(limit), 200);
-
     const stateFilter: any = {};
 
     if (crop) stateFilter.commodity = { $regex: new RegExp(String(crop), "i") };
     if (state) stateFilter.state = { $regex: new RegExp(String(state), "i") };
 
-    // Default to Karnataka if no state specified
-    const searchState = state || "Karnataka";
-    stateFilter.state = { $regex: new RegExp(String(searchState), "i") };
-
-    let prices: any[] = [];
+    const districtFilter = district ? { ...stateFilter, district: { $regex: new RegExp(String(district), "i") } } : stateFilter;
+    let prices = await MarketPrice.find(districtFilter).sort({ arrivalDate: -1, modalPrice: -1 }).limit(50).lean();
     let scope: "district" | "state" = district ? "district" : "state";
 
-    if (district) {
-      // Try district-specific search first
-      const districtFilter = { ...stateFilter, district: { $regex: new RegExp(String(district), "i") } };
-      prices = await MarketPrice.find(districtFilter)
-        .sort({ arrivalDate: -1 })
-        .limit(limitNum)
-        .lean();
-
-      // If no district results, fall back to statewide
-      if (prices.length === 0) {
-        prices = await MarketPrice.find(stateFilter)
-          .sort({ arrivalDate: -1 })
-          .limit(limitNum * 5) // Get more for statewide
-          .lean();
-        scope = "state";
-      }
-    } else {
-      // Statewide search (default behavior)
-      prices = await MarketPrice.find(stateFilter)
-        .sort({ arrivalDate: -1 })
-        .limit(limitNum * 5)
-        .lean();
-    }
-
-    // Apply sorting
-    if (sortBy === "price") {
-      prices.sort((a, b) => b.modalPrice - a.modalPrice);
-    } else if (sortBy === "distance" && lat !== null && lng !== null) {
-      prices.sort((first, second) => {
+    if (prices.length === 0 && district) {
+      const statePrices = await MarketPrice.find(stateFilter).sort({ arrivalDate: -1, modalPrice: -1 }).limit(500).lean();
+      prices = statePrices.sort((first, second) => {
+        if (lat === null || lng === null) return second.modalPrice - first.modalPrice;
         const firstDistance = districtDistanceKm(first.district, lat, lng) ?? Number.POSITIVE_INFINITY;
         const secondDistance = districtDistanceKm(second.district, lat, lng) ?? Number.POSITIVE_INFINITY;
         return firstDistance - secondDistance;
-      });
+      }).slice(0, 50);
+      scope = "state";
     }
-    // Default: date (already sorted)
-
-    // Limit after sorting
-    prices = prices.slice(0, limitNum);
 
     res.status(200).json({
       success: true,
       count: prices.length,
       scope,
-      state: searchState,
-      district: district || undefined,
-      fallbackMessage: scope === "state" && district ? `No ${crop || "crop"} record was published in ${district}; showing available records from ${searchState}.` : undefined,
+      fallbackMessage: scope === "state" && district ? `No ${crop || "crop"} record was published in ${district}; showing the nearest available records from ${state}.` : undefined,
       prices,
     });
   } catch (error: any) {
@@ -155,86 +120,6 @@ priceRouter.get("/trends", async (req: Request, res: Response): Promise<void> =>
     res.status(200).json({ success: true, count: trends.length, trends });
   } catch (error: any) {
     res.status(500).json({ success: false, message: error.message || "Failed to fetch trends" });
-  }
-});
-
-/**
- * GET /api/v1/prices/status
- * Source health and freshness for price data
- */
-priceRouter.get("/status", async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { source } = req.query;
-
-    const filter: any = {};
-    if (source) filter.source = source;
-
-    const totalRecords = await MarketPrice.countDocuments(filter);
-    const latestRecord = await MarketPrice.findOne(filter)
-      .sort({ arrivalDate: -1 })
-      .select("arrivalDate source retrievedAt");
-
-    const sourceGroups = await MarketPrice.aggregate([
-      { $match: filter },
-      {
-        $group: {
-          _id: "$source",
-          count: { $sum: 1 },
-          latestArrival: { $max: "$arrivalDate" },
-          latestRetrieval: { $max: "$retrievedAt" },
-        },
-      },
-    ]);
-
-    const sources = sourceGroups.map((group) => ({
-      source: group._id,
-      records: group.count,
-      latestArrivalDate: group.latestArrival,
-      latestRetrievalAt: group.latestRetrieval,
-      isStale: group.latestRetrieval
-        ? (Date.now() - group.latestRetrieval.getTime()) / (1000 * 60 * 60 * 24) > 7
-        : false,
-    }));
-
-    res.status(200).json({
-      success: true,
-      totalRecords,
-      latestRecord: latestRecord
-        ? {
-            arrivalDate: latestRecord.arrivalDate,
-            source: latestRecord.source,
-            retrievedAt: latestRecord.retrievedAt,
-          }
-        : null,
-      sources,
-    });
-  } catch (error: any) {
-    res.status(500).json({ success: false, message: error.message || "Failed to fetch price status" });
-  }
-});
-
-/**
- * GET /api/v1/prices/filters
- * Available state, district, market and crop filters
- */
-priceRouter.get("/filters", async (req: Request, res: Response): Promise<void> => {
-  try {
-    const states = await MarketPrice.distinct("state");
-    const districts = await MarketPrice.distinct("district");
-    const markets = await MarketPrice.distinct("market");
-    const commodities = await MarketPrice.distinct("commodity");
-
-    res.status(200).json({
-      success: true,
-      filters: {
-        states: states.sort(),
-        districts: districts.sort(),
-        markets: markets.sort(),
-        commodities: commodities.sort(),
-      },
-    });
-  } catch (error: any) {
-    res.status(500).json({ success: false, message: error.message || "Failed to fetch filters" });
   }
 });
 

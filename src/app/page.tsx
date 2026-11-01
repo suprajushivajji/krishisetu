@@ -27,7 +27,6 @@ import {
   User as UserIcon,
   LogIn,
   CheckCircle2,
-  Download,
 } from "lucide-react";
 
 import { api } from "@/lib/api";
@@ -35,6 +34,7 @@ import { translations, Language } from "@/lib/translations";
 import { BusinessRegistrationModal } from "@/components/BusinessRegistrationModal";
 import { SendEnquiryModal } from "@/components/SendEnquiryModal";
 import { VoiceAssistantModal } from "@/components/VoiceAssistantModal";
+import { VoiceCallModal } from "@/components/VoiceCallModal";
 import { AuthModal } from "@/components/AuthModal";
 import { MapView } from "@/components/MapView";
 
@@ -96,6 +96,7 @@ export default function Home() {
   // Modals State
   const [isBusinessModalOpen, setIsBusinessModalOpen] = useState(false);
   const [isVoiceModalOpen, setIsVoiceModalOpen] = useState(false);
+  const [isCallModalOpen, setIsCallModalOpen] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [selectedBuyerForEnquiry, setSelectedBuyerForEnquiry] = useState<Buyer | null>(null);
 
@@ -251,6 +252,7 @@ export default function Home() {
     { label: t.home, icon: HomeIcon, id: "Home" },
     { label: t.comparePrices, icon: TrendingUp, id: "Compare prices" },
     { label: t.findBuyers, icon: Store, id: "Find buyers" },
+    { label: lang === "kn" ? "ಧ್ವನಿ ಕರೆ" : lang === "hi" ? "वॉइस कॉल" : "Voice call", icon: Phone, id: "Voice call" },
     { label: t.businessPortal, icon: Building2, id: "Register business" },
   ];
 
@@ -283,6 +285,8 @@ export default function Home() {
               onClick={() => {
                 if (id === "Register business") {
                   setIsBusinessModalOpen(true);
+                } else if (id === "Voice call") {
+                  setIsCallModalOpen(true);
                 } else {
                   setActive(id);
                 }
@@ -573,7 +577,6 @@ export default function Home() {
                     buyer={buyer}
                     quantity={quantity}
                     onContact={() => setSelectedBuyerForEnquiry(buyer)}
-                    currentUser={currentUser}
                   />
                 ))}
               </section>
@@ -615,7 +618,6 @@ export default function Home() {
               loading={loadingBuyers}
               mapCenter={mapCenter}
               locationLabel={location}
-              currentUser={currentUser}
             />
           )}
         </div>
@@ -655,7 +657,15 @@ export default function Home() {
       <VoiceAssistantModal
         isOpen={isVoiceModalOpen}
         onClose={() => setIsVoiceModalOpen(false)}
-        language={lang === "kn" ? "kn" : "en"}
+        language={lang}
+        district={district || undefined}
+      />
+
+      <VoiceCallModal
+        key={lang}
+        isOpen={isCallModalOpen}
+        onClose={() => setIsCallModalOpen(false)}
+        language={lang === "kn" ? "kn-IN" : lang === "hi" ? "hi-IN" : "en-IN"}
         district={district || undefined}
       />
 
@@ -672,30 +682,13 @@ function BuyerCard({
   buyer,
   quantity,
   onContact,
-  currentUser,
 }: {
   buyer: Buyer;
   quantity: number;
   onContact: () => void;
-  currentUser: any;
 }) {
   const distKm = buyer.distanceKm || Number.parseInt(buyer.distance) || 15;
   const netEarnings = buyer.price * quantity - quantity * 1.2 - distKm * 8;
-
-  const handleDownloadCSV = () => {
-    const farmerName = currentUser?.name || "Unknown Farmer";
-    const farmerDistrict = currentUser?.district || "Unknown District";
-    const farmerPhone = currentUser?.phone || "Unknown Phone";
-    
-    const csvContent = `Buyer Name,Buyer Phone,Buyer Category,Buyer District,Buyer Price,Farmer Name,Farmer District,Farmer Phone,Source\n${buyer.name},${buyer.phone || "N/A"},${buyer.category},${buyer.district || "N/A"},${buyer.price},${farmerName},${farmerDistrict},${farmerPhone},"AGMARKNET CSV"`;
-    const blob = new Blob([csvContent], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `apmc_farmer_contact_${buyer.name.replace(/\s+/g, "_")}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
 
   return (
     <article className="buyer-card">
@@ -741,11 +734,8 @@ function BuyerCard({
         </div>
 
         <div className="buyer-footer">
-          <div className="buyer-actions">
-            <button className="primary-button" onClick={handleDownloadCSV}>
-              <Download size={14} /> Get APMC Details
-            </button>
-          </div>
+          <span>Updated {buyer.updated || "Recently"}</span>
+          {buyer.isMarketReference ? <span className="source">{buyer.source || "Imported market data"}</span> : <button className="contact-button" onClick={onContact}><Phone size={14} /> Send Enquiry</button>}
         </div>
       </div>
     </article>
@@ -934,7 +924,6 @@ function BuyersView({
   loading,
   mapCenter,
   locationLabel,
-  currentUser,
 }: {
   visibleBuyers: Buyer[];
   radius: number;
@@ -948,68 +937,8 @@ function BuyersView({
   loading: boolean;
   mapCenter: [number, number];
   locationLabel: string;
-  currentUser: any;
 }) {
   const [searchTerm, setSearchTerm] = useState("");
-  const [mandiLocations, setMandiLocations] = useState<any[]>([]);
-
-  // Load mandi locations from CSV
-  useEffect(() => {
-    // Static mandi locations data (embedded to avoid path issues)
-    const mandiData: Array<{
-      record_id: number;
-      mandi_name: string;
-      district: string;
-      state: string;
-      price: number;
-      take_home: number;
-      latitude: number;
-      longitude: number;
-    }> = [
-      { record_id: 1, mandi_name: "Mayabander Vegetable Market", district: "North and Middle Andaman", state: "Andaman and Nicobar Islands", price: 80, take_home: 39280, latitude: 12.924, longitude: 92.896 },
-      { record_id: 2, mandi_name: "Manubazar", district: "South Tripura", state: "Tripura", price: 66, take_home: 32280, latitude: 23.045, longitude: 91.615 },
-      { record_id: 3, mandi_name: "Gondatwisa APMC", district: "Dhalai", state: "Tripura", price: 65, take_home: 31780, latitude: 23.936, longitude: 91.857 },
-      { record_id: 4, mandi_name: "Palakkad Market", district: "Palakad", state: "Kerala", price: 56, take_home: 27280, latitude: 10.7867, longitude: 76.6548 },
-      { record_id: 5, mandi_name: "Vadakkenchery Market", district: "Palakad", state: "Kerala", price: 55, take_home: 26780, latitude: 10.594, longitude: 76.487 },
-      { record_id: 6, mandi_name: "Damnagar APMC", district: "Amreli", state: "Gujarat", price: 55, take_home: 26780, latitude: 21.692, longitude: 71.517 },
-      { record_id: 7, mandi_name: "Broadway market Market", district: "Ernakulam", state: "Kerala", price: 52, take_home: 25280, latitude: 9.9816, longitude: 76.2744 },
-      { record_id: 8, mandi_name: "Kalyanpur APMC", district: "Khowai", state: "Tripura", price: 51, take_home: 24780, latitude: 24.067, longitude: 91.626 },
-      { record_id: 9, mandi_name: "Anchal Market", district: "Kollam", state: "Kerala", price: 50, take_home: 24280, latitude: 8.92969, longitude: 76.90843 },
-      { record_id: 10, mandi_name: "Perambalur(Uzhavar Sandhai)", district: "Perambalur", state: "Tamil Nadu", price: 50, take_home: 24280, latitude: 11.2342, longitude: 78.8807 },
-      { record_id: 11, mandi_name: "Sankarapuram(Uzhavar Sandhai)", district: "Kallakurichi", state: "Tamil Nadu", price: 48, take_home: 23280, latitude: 11.887, longitude: 78.929 },
-      { record_id: 12, mandi_name: "Kallakurichi(Uzhavar Sandhai)", district: "Kallakurichi", state: "Tamil Nadu", price: 48, take_home: 23280, latitude: 11.7401, longitude: 78.9597 },
-      { record_id: 13, mandi_name: "Pattukottai(Uzhavar Sandhai)", district: "Thanjavur", state: "Tamil Nadu", price: 48, take_home: 23280, latitude: 10.4236, longitude: 79.3197 },
-      { record_id: 14, mandi_name: "Angamaly Market", district: "Ernakulam", state: "Kerala", price: 48, take_home: 23280, latitude: 10.196, longitude: 76.386 },
-      { record_id: 15, mandi_name: "Pallapatti (Uzhavar Sandhai)", district: "Karur", state: "Tamil Nadu", price: 47.5, take_home: 23030, latitude: 10.722, longitude: 78.148 },
-      { record_id: 16, mandi_name: "Chinnalapatti(Uzhavar Sandhai)", district: "Dindigul", state: "Tamil Nadu", price: 47.5, take_home: 23030, latitude: 10.301, longitude: 77.941 },
-      { record_id: 17, mandi_name: "Sathur(Uzhavar Sandhai)", district: "Virudhunagar", state: "Tamil Nadu", price: 47.5, take_home: 23030, latitude: 9.364, longitude: 77.924 },
-      { record_id: 18, mandi_name: "Rasipuram(Uzhavar Sandhai)", district: "Namakkal", state: "Tamil Nadu", price: 47, take_home: 22780, latitude: 11.46, longitude: 78.186 },
-      { record_id: 19, mandi_name: "Melapalayam(Uzhavar Sandhai)", district: "Tirunelveli", state: "Tamil Nadu", price: 47, take_home: 22780, latitude: 8.713, longitude: 77.713 },
-      { record_id: 20, mandi_name: "Kandiyaperi(Uzhavar Sandhai)", district: "Tirunelveli", state: "Tamil Nadu", price: 47, take_home: 22780, latitude: 8.746, longitude: 77.69 },
-      { record_id: 21, mandi_name: "Palayamkottai(Uzhavar Sandhai)", district: "Tirunelveli", state: "Tamil Nadu", price: 47, take_home: 22780, latitude: 8.728, longitude: 77.708 },
-      { record_id: 22, mandi_name: "Karaikudi(Uzhavar Sandhai)", district: "Sivagangai", state: "Tamil Nadu", price: 46.5, take_home: 22530, latitude: 10.073, longitude: 78.78 },
-      { record_id: 23, mandi_name: "Coonoor(Uzhavar Sandhai)", district: "The Nilgiris", state: "Tamil Nadu", price: 46.5, take_home: 22530, latitude: 11.353, longitude: 76.795 },
-      { record_id: 24, mandi_name: "Tirupatthur(Uzhavar Sandhai)", district: "Sivagangai", state: "Tamil Nadu", price: 46.5, take_home: 22530, latitude: 10.115, longitude: 78.6 },
-      { record_id: 25, mandi_name: "Devakottai (Uzhavar Sandhai)", district: "Sivagangai", state: "Tamil Nadu", price: 46.5, take_home: 22530, latitude: 9.947, longitude: 78.824 },
-      { record_id: 26, mandi_name: "Peravurani(Uzhavar Sandhai)", district: "Thanjavur", state: "Tamil Nadu", price: 46, take_home: 22280, latitude: 10.292, longitude: 79.202 },
-      { record_id: 27, mandi_name: "Panichowki", district: "Unokoti", state: "Tripura", price: 46, take_home: 22280, latitude: 24.327, longitude: 92.013 },
-      { record_id: 28, mandi_name: "Sonamura APMC", district: "Sepahijala", state: "Tripura", price: 46, take_home: 22280, latitude: 23.475, longitude: 91.266 },
-      { record_id: 29, mandi_name: "Mohanur(Uzhavar Sandhai)", district: "Namakkal", state: "Tamil Nadu", price: 45, take_home: 21780, latitude: 11.059, longitude: 78.139 },
-      { record_id: 30, mandi_name: "Kattappana Market", district: "Idukki", state: "Kerala", price: 45, take_home: 21780, latitude: 9.754, longitude: 77.116 },
-      { record_id: 31, mandi_name: "Dindigul(Uzhavar Sandhai)", district: "Dindigul", state: "Tamil Nadu", price: 45, take_home: 21780, latitude: 10.367, longitude: 77.98 },
-      { record_id: 32, mandi_name: "Natrampalli(Uzhavar Sandhai)", district: "Thirupathur", state: "Tamil Nadu", price: 45, take_home: 21780, latitude: 12.582, longitude: 78.518 },
-      { record_id: 33, mandi_name: "Thiruchengodu RM", district: "Namakkal", state: "Tamil Nadu", price: 45, take_home: 21780, latitude: 11.38, longitude: 77.894 },
-      { record_id: 34, mandi_name: "Paramathivelur(Uzhavar Sandhai)", district: "Namakkal", state: "Tamil Nadu", price: 44, take_home: 21280, latitude: 11.108, longitude: 78.002 },
-      { record_id: 35, mandi_name: "Tamarainagar(Uzhavar Sandhai)", district: "Thiruvannamalai", state: "Tamil Nadu", price: 44, take_home: 21280, latitude: 12.232, longitude: 79.074 },
-      { record_id: 36, mandi_name: "Thanjavur(Uzhavar Sandhai)", district: "Thanjavur", state: "Tamil Nadu", price: 44, take_home: 21280, latitude: 10.787, longitude: 79.137 },
-      { record_id: 37, mandi_name: "Singampunari(Uzhavar Sandhai)", district: "Sivagangai", state: "Tamil Nadu", price: 44, take_home: 21280, latitude: 10.188, longitude: 78.568 },
-      { record_id: 38, mandi_name: "Sivagangai (Uzhavar Sandhai)", district: "Sivagangai", state: "Tamil Nadu", price: 44, take_home: 21280, latitude: 9.843, longitude: 78.48 },
-      { record_id: 39, mandi_name: "NGO Colony(Uzhavar Sandhai)", district: "Tirunelveli", state: "Tamil Nadu", price: 44, take_home: 21280, latitude: 8.728, longitude: 77.708 },
-      { record_id: 40, mandi_name: "Chathanoor Market", district: "Kollam", state: "Kerala", price: 44, take_home: 21280, latitude: 8.958, longitude: 76.917 },
-      { record_id: 41, mandi_name: "Usilampatti(Uzhavar Sandhai)", district: "Madurai", state: "Tamil Nadu", price: 44, take_home: 21280, latitude: 9.969, longitude: 77.787 },
-    ];
-    setMandiLocations(mandiData);
-  }, []);
 
   const filtered = visibleBuyers.filter(
     (b) =>
@@ -1057,52 +986,19 @@ function BuyersView({
           </div>
           <div className="map-surface real-map-surface">
             <MapView
-              center={mapCenter} // Use actual user location center
-              zoom={5} // Lower zoom to show all India
-              userLocation={mapCenter} // Pass user location for "YOU" marker
-              markers={[
-                // Buyer markers
-                ...filtered.flatMap((buyer): Array<{
-                  lat: number;
-                  lng: number;
-                  title: string;
-                  description: string;
-                  isVerified: boolean;
-                  price: number;
-                  onClick: () => void;
-                  type: "buyer";
-                }> => {
-                  if (!buyer.coordinates) return [];
-                  return [{
-                    lat: buyer.coordinates[1],
-                    lng: buyer.coordinates[0],
-                    title: buyer.name,
-                    description: `${buyer.category} · ${buyer.distance}`,
-                    isVerified: buyer.verified,
-                    price: buyer.price,
-                    onClick: () => onContact(buyer),
-                    type: "buyer",
-                  }];
-                }),
-                // Mandi location markers
-                ...mandiLocations.map((mandi): {
-                  lat: number;
-                  lng: number;
-                  title: string;
-                  description: string;
-                  isVerified: boolean;
-                  price: number;
-                  type: "mandi";
-                } => ({
-                  lat: mandi.latitude,
-                  lng: mandi.longitude,
-                  title: mandi.mandi_name,
-                  description: `${mandi.district}, ${mandi.state} · ₹${mandi.price}/kg`,
-                  isVerified: true,
-                  price: mandi.price,
-                  type: "mandi",
-                })),
-              ]}
+              center={mapCenter}
+              markers={filtered.flatMap((buyer) => {
+                if (!buyer.coordinates) return [];
+                return [{
+                  lat: buyer.coordinates[1],
+                  lng: buyer.coordinates[0],
+                  title: buyer.name,
+                  description: `${buyer.category} · ${buyer.distance}`,
+                  isVerified: buyer.verified,
+                  price: buyer.price,
+                  onClick: () => onContact(buyer),
+                }];
+              })}
             />
           </div>
           <div className="map-legend">
@@ -1111,9 +1007,6 @@ function BuyersView({
             </span>
             <span>
               <i className="dot amber-dot" /> Pending verification
-            </span>
-            <span>
-              <i className="dot clay-dot" /> Mandi location
             </span>
             <span>
               <Navigation size={13} /> Approx. straight-line distance
@@ -1169,7 +1062,6 @@ function BuyersView({
               buyer={buyer}
               quantity={quantity}
               onContact={() => onContact(buyer)}
-              currentUser={currentUser}
             />
           ))}
         </div>

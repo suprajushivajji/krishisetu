@@ -1,8 +1,10 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { Mic, MicOff, Volume2, Sparkles, AlertCircle, Play, Square } from "lucide-react";
 import { api } from "@/lib/api";
+import { audioEngine, SupportedLanguage } from "@/lib/sharedAudioEngine";
+import { getVoiceQuestion, type SupportedLanguage as QuestionLanguage } from "@/lib/voiceQuestions";
 
 export function VoiceAssistantModal({
   isOpen,
@@ -12,7 +14,7 @@ export function VoiceAssistantModal({
 }: {
   isOpen: boolean;
   onClose: () => void;
-  language?: "kn" | "en";
+  language?: "kn" | "hi" | "en";
   district?: string;
 }) {
   const [isRecording, setIsRecording] = useState(false);
@@ -21,11 +23,31 @@ export function VoiceAssistantModal({
   const [response, setResponse] = useState<any>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
+  const initializedRef = useRef(false);
+  const configuredQuestion = getVoiceQuestion(language as QuestionLanguage);
 
-  const wavRecorderRef = useRef<any>(null);
-  const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
-
-  if (!isOpen) return null;
+  // Initialize shared audio engine
+  useEffect(() => {
+    if (!isOpen || initializedRef.current) return;
+    const lang = (language === "kn" ? "kn-IN" : language === "hi" ? "hi-IN" : "en-IN") as SupportedLanguage;
+    audioEngine.initialize({
+      language: lang,
+      onError: (err) => setErrorMsg(err),
+      onStateChange: (state) => {
+        setIsRecording(state === "recording");
+        setIsPlayingAudio(state === "speaking");
+        setLoading(state === "processing");
+      },
+    }).then(() => {
+      initializedRef.current = true;
+    }).catch((err) => {
+      setErrorMsg(err.message || "Failed to initialize audio engine");
+    });
+    
+    return () => {
+      initializedRef.current = false;
+    };
+  }, [isOpen, language]);
 
   const startRecording = async () => {
     setErrorMsg(null);
@@ -33,10 +55,7 @@ export function VoiceAssistantModal({
     setResponse(null);
 
     try {
-      const { WavRecorder } = await import("@/lib/wavRecorder");
-      const recorder = new WavRecorder();
-      wavRecorderRef.current = recorder;
-      await recorder.start();
+      await audioEngine.startRecording();
       setIsRecording(true);
     } catch (err: any) {
       setErrorMsg("Microphone permission was denied or is unavailable in your browser.");
@@ -44,11 +63,11 @@ export function VoiceAssistantModal({
   };
 
   const stopRecording = async () => {
-    if (wavRecorderRef.current && isRecording) {
+    if (audioEngine.getIsRecording()) {
       try {
         setIsRecording(false);
         setLoading(true);
-        const wavBlob = await wavRecorderRef.current.stop();
+        const wavBlob = await audioEngine.stopRecording();
         await processAudio(wavBlob);
       } catch (err: any) {
         setErrorMsg("Failed to capture audio: " + err.message);
@@ -61,17 +80,15 @@ export function VoiceAssistantModal({
     setLoading(true);
     setErrorMsg(null);
 
-    // Call real Gnani STT endpoint
-    const languageCode = language === "kn" ? "kn-IN" : "en-IN";
-    const sttResult = await api.uploadAudio(blob, languageCode);
+    const lang = (language === "kn" ? "kn-IN" : language === "hi" ? "hi-IN" : "en-IN") as SupportedLanguage;
+    const sttResult = await audioEngine.transcribe(blob, lang);
 
     if (sttResult.success && sttResult.transcript) {
       setTranscript(sttResult.transcript);
       await executeVoiceQuery(sttResult.transcript);
     } else {
-      // If Gnani API key is not configured or upstream returned unconfigured notice
-      if (sttResult.message?.includes("GNANI_API_KEY") || sttResult.message?.includes("503")) {
-        setErrorMsg("⚠️ Voice service not configured. Add GNANI_API_KEY to Render environment variables to enable Kannada/English voice features. You can type your question below.");
+      if (sttResult.message?.includes("GNANI_API_KEY")) {
+        setErrorMsg("⚠️ [Gnani Speech Integration] " + sttResult.message);
       } else {
         setErrorMsg(sttResult.message || "Could not transcribe audio. You can also type your question below.");
       }
@@ -81,17 +98,17 @@ export function VoiceAssistantModal({
 
   const executeVoiceQuery = async (queryText: string) => {
     setLoading(true);
-    const languageCode = language === "kn" ? "kn-IN" : "en-IN";
+    const lang = (language === "kn" ? "kn-IN" : language === "hi" ? "hi-IN" : "en-IN") as SupportedLanguage;
     const res = await api.post("/voice/assistant", {
       transcript: queryText,
-      languageCode,
+      languageCode: lang,
       district,
     });
 
     setLoading(false);
     if (res.success) {
       setResponse(res);
-      // Don't auto-play - let user click play button
+      await playTts(res.response);
     } else {
       setErrorMsg(res.message || "Failed to process query.");
     }
@@ -99,42 +116,20 @@ export function VoiceAssistantModal({
 
   const playTts = async (textToSpeak: string) => {
     try {
-      // Cancel any previous audio immediately
-      if (typeof window !== "undefined" && "speechSynthesis" in window) {
-        window.speechSynthesis.cancel();
-      }
-      if (audioPlayerRef.current) {
-        audioPlayerRef.current.pause();
-        audioPlayerRef.current.currentTime = 0;
-      }
-      
       setIsPlayingAudio(true);
-      
-      // Use browser synthesis for both languages
-      // For Kannada, use Hindi voice as fallback (closer to Kannada than English)
-      if (typeof window !== "undefined" && "speechSynthesis" in window) {
-        const utterance = new SpeechSynthesisUtterance(textToSpeak);
-        utterance.lang = language === "kn" ? "hi-IN" : "en-IN";
-        utterance.rate = 0.9;
-        utterance.pitch = 1.0;
-        utterance.volume = 1.0;
-        utterance.onend = () => setIsPlayingAudio(false);
-        utterance.onerror = () => setIsPlayingAudio(false);
-        window.speechSynthesis.speak(utterance);
-      } else {
-        setIsPlayingAudio(false);
-        setErrorMsg("Speech synthesis not supported in this browser");
-      }
-    } catch (err: any) {
-      console.error("TTS error:", err);
-      setErrorMsg("Failed to play audio: " + err.message);
+      const lang = (language === "kn" ? "kn-IN" : language === "hi" ? "hi-IN" : "en-IN") as SupportedLanguage;
+      await audioEngine.speak(textToSpeak, lang);
+      setIsPlayingAudio(false);
+    } catch {
+      setErrorMsg("Could not connect to the speech service.");
       setIsPlayingAudio(false);
     }
   };
 
+  if (!isOpen) return null;
+
   return (
     <div className="modal-backdrop">
-      <audio ref={audioPlayerRef} style={{ display: "none" }} />
       <div className="modal-container voice-modal">
         <div className="modal-header">
           <div>
@@ -143,9 +138,7 @@ export function VoiceAssistantModal({
             </span>
             <h2>{language === "kn" ? "ಕೃಷಿಸೇತು ಧ್ವನಿ ಸಹಾಯಕ" : "KrishiSetu Voice Assistant"}</h2>
             <p>
-              {language === "kn"
-                ? "ಟೊಮೇಟೊ ಬೆಲೆ, ಹತ್ತಿರದ ಖರೀದಿದಾರರು ಅಥವಾ ಲಾಭದ ಲೆಕ್ಕಾಚಾರದ ಬಗ್ಗೆ ಕನ್ನಡದಲ್ಲಿ ಮಾತನಾಡಿ."
-                : "Ask about crop rates, nearby buyers or net earnings in Kannada or English."}
+              {configuredQuestion}
             </p>
           </div>
           <button className="icon-btn" onClick={onClose} aria-label="Close modal">
@@ -181,40 +174,6 @@ export function VoiceAssistantModal({
               ? "ಮಾತನಾಡಲು ಮೈಕ್ರೋಫೋನ್ ಕ್ಲಿಕ್ ಮಾಡಿ"
               : "Tap microphone to speak"}
           </span>
-        </div>
-
-        {/* Quick sample chips */}
-        <div className="voice-samples">
-          <small>{language === "kn" ? "ಉದಾಹರಣೆ ಪ್ರಶ್ನೆಗಳು:" : "Try asking:"}</small>
-          <div className="chips-container">
-            <button
-              className="chip-button"
-              onClick={() => {
-                setTranscript("ದಾವಣಗೆರೆ ಮಂಡಿಯಲ್ಲಿ ಇಂದಿನ ಟೊಮೇಟೊ ಬೆಲೆ ಎಷ್ಟು?");
-                executeVoiceQuery("ದಾವಣಗೆರೆ ಮಂಡಿಯಲ್ಲಿ ಇಂದಿನ ಟೊಮೇಟೊ ಬೆಲೆ ಎಷ್ಟು?");
-              }}
-            >
-              🍅 {language === "kn" ? "ಇಂದಿನ ಟೊಮೇಟೊ ದರ" : "Today's tomato rate"}
-            </button>
-            <button
-              className="chip-button"
-              onClick={() => {
-                setTranscript("ದಾವಣಗೆರೆಯಲ್ಲಿ ಟೊಮೇಟೊ ಖರೀದಿದಾರರು ಯಾರು?");
-                executeVoiceQuery("ದಾವಣಗೆರೆಯಲ್ಲಿ ಟೊಮೇಟೊ ಖರೀದಿದಾರರು ಯಾರು?");
-              }}
-            >
-              🏪 {language === "kn" ? "ಹತ್ತಿರದ ಖರೀದಿದಾರರು" : "Find buyers near me"}
-            </button>
-            <button
-              className="chip-button"
-              onClick={() => {
-                setTranscript("500 ಕೆಜಿ ಬೆಳೆಗೆ ಎಷ್ಟು ಲಾಭ ಬರುತ್ತದೆ?");
-                executeVoiceQuery("500 ಕೆಜಿ ಬೆಳೆಗೆ ಎಷ್ಟು ಲಾಭ ಬರುತ್ತದೆ?");
-              }}
-            >
-              💰 {language === "kn" ? "500 ಕೆಜಿ ನಿವ್ವಳ ಲಾಭ" : "500kg net earnings"}
-            </button>
-          </div>
         </div>
 
         {transcript && (

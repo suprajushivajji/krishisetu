@@ -35,6 +35,7 @@ export interface SynthesizeOptions {
   text: string;
   languageCode?: string;
   voice?: string;
+  voiceGender?: "female" | "male";
   audioFormat?: "wav" | "mp3";
 }
 
@@ -64,6 +65,21 @@ export class GnaniService {
   }
 
   /**
+   * Get appropriate voice for language
+   */
+  private static getVoiceForLanguage(languageCode: string, voiceGender: "female" | "male" = "female"): string {
+    const lang = this.normalizeLanguageCode(languageCode);
+    const voiceMap: Record<string, { female: string; male: string }> = {
+      "kn-IN": { female: "Saanvi", male: "Kavin" },
+      "hi-IN": { female: "Nalini", male: "Deepak" },
+      "en-IN": { female: "Kaveri", male: "Girish" },
+      "te-IN": { female: "Suhana", male: "Lehara" },
+      "ta-IN": { female: "Asmita", male: "Trisha" },
+    };
+    return voiceMap[lang]?.[voiceGender] || "Nalini";
+  }
+
+  /**
    * Transcribe speech using Gnani Prisma v2.5
    */
   public static async transcribe(options: TranscribeOptions): Promise<TranscribeResult> {
@@ -78,7 +94,11 @@ export class GnaniService {
     }
 
     try {
+      const requestStartedAt = Date.now();
       const normalizedLang = this.normalizeLanguageCode(languageCode);
+      if (audioBuffer && !this.isPcmWav(audioBuffer)) {
+        throw new Error("STT audio must be a valid PCM WAV file.");
+      }
       const form = new FormData();
       if (filePath) {
         form.append("audio_file", fs.createReadStream(filePath));
@@ -100,6 +120,12 @@ export class GnaniService {
         },
         timeout: 15000,
       });
+      console.info("[voice] Gnani STT completed", {
+        milliseconds: Date.now() - requestStartedAt,
+        bytes: audioBuffer?.length,
+        language: normalizedLang,
+        status: response.status,
+      });
 
       const transcript =
         response.data?.transcript ||
@@ -115,34 +141,56 @@ export class GnaniService {
         provider: "gnani",
       };
     } catch (error: any) {
-      console.error("❌ [Gnani Prisma STT Error]:", error?.response?.data || error?.message);
+      const providerError = error?.response?.data;
+      console.error("❌ [Gnani Prisma STT Error]:", providerError || error?.message);
+      const detail = typeof providerError === "string"
+        ? providerError
+        : providerError?.message || providerError?.error || error?.message || "Unknown error";
       throw new Error(
-        `Gnani STT failed: ${error?.response?.data?.message || error?.message || "Unknown error"}`
+        `Gnani STT failed: ${detail}`
       );
     }
+
+  }
+
+  private static isPcmWav(buffer: Buffer): boolean {
+    if (buffer.length < 44) return false;
+    if (buffer.toString("ascii", 0, 4) !== "RIFF" || buffer.toString("ascii", 8, 12) !== "WAVE") return false;
+    if (buffer.toString("ascii", 12, 16) !== "fmt ") return false;
+    const audioFormat = buffer.readUInt16LE(20);
+    const channels = buffer.readUInt16LE(22);
+    const bitsPerSample = buffer.readUInt16LE(34);
+    return audioFormat === 1 && channels === 1 && bitsPerSample === 16;
   }
 
   /**
    * Synthesize text to speech using Gnani Timbre v2.5
    */
   public static async synthesize(options: SynthesizeOptions): Promise<SynthesizeResult> {
-    const { text, languageCode = "kn-IN", voice = "Nalini", audioFormat = "wav" } = options;
+    const { text, languageCode = "kn-IN", voice, audioFormat = "wav" } = options;
 
     if (!this.isConfigured()) {
       throw new Error("Gnani API key is not configured. Set GNANI_API_KEY in server environment.");
     }
 
     try {
+      const requestStartedAt = Date.now();
       const normalizedLang = this.normalizeLanguageCode(languageCode);
-      // Use simple voice name for Kannada
-      const voiceName = "Nalini";
+      const voiceName = voice || this.getVoiceForLanguage(normalizedLang, options.voiceGender);
       
       const payload = {
         model: "timbre-v2.5",
         text: text.trim(),
         voice: voiceName,
-        language_code: normalizedLang,
-        audio_format: audioFormat,
+        language: normalizedLang,
+        speed: 1.0,
+        audio_config: {
+          sample_rate: 48000,
+          num_channels: 1,
+          sample_width: 2,
+          encoding: "linear_pcm",
+          container: audioFormat === "mp3" ? "mp3" : "wav",
+        },
       };
 
       const response = await axios.post("https://api.vachana.ai/api/v1/tts/inference", payload, {
@@ -162,9 +210,22 @@ export class GnaniService {
       }
 
       const rawAudio = Buffer.from(response.data);
+      
+      // Check for empty audio
+      if (rawAudio.length < 100) {
+        throw new Error("Gnani TTS returned empty or insufficient audio data");
+      }
+      
       const audioBuffer = upstreamContentType === "application/octet-stream" && !rawAudio.subarray(0, 4).equals(Buffer.from("RIFF"))
         ? this.wrapPcmAsWav(rawAudio)
         : rawAudio;
+      console.info("[voice] Gnani TTS completed", {
+        milliseconds: Date.now() - requestStartedAt,
+        bytes: audioBuffer.length,
+        contentType: upstreamContentType,
+        format: audioFormat,
+        language: normalizedLang,
+      });
 
       return {
         audioBuffer,

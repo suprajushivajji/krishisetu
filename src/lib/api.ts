@@ -225,6 +225,19 @@ class ApiClient {
     }
   }
 
+  /**
+   * Voice business-registration extraction: propose whitelisted form-field
+   * updates from a transcript via the existing free OpenRouter model.
+   */
+  public async extractRegistrationFields(body: {
+    transcript: string;
+    language: string;
+    currentFieldId?: string | null;
+    formState?: Record<string, unknown>;
+  }): Promise<ApiResponse<{ updates: { fieldId: string; value: unknown }[]; usedModel?: boolean; modelUnavailable?: boolean }>> {
+    return this.post("/voice/registration/extract", body);
+  }
+
   private async readJson(res: Response): Promise<ApiResponse | null> {
     const contentType = res.headers.get("content-type") || "";
     if (!contentType.includes("application/json")) {

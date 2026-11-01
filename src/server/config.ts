@@ -15,7 +15,7 @@ const envSchema = z.object({
   AGMARKNET_RESOURCE_ID: z.string().optional().default("9ef84268-d588-465a-a308-a864a43d0070"),
   GOOGLE_MAPS_API_KEY: z.string().optional().default(""),
   OPENROUTER_API_KEY: z.string().optional().default(""),
-  OPENROUTER_MODEL: z.string().optional().default("anthropic/claude-3-haiku"),
+  OPENROUTER_MODEL: z.string().optional().default("nvidia/nemotron-3-ultra-550b-a55b:free"),
 });
 
 const parsed = envSchema.safeParse(process.env);
@@ -62,5 +62,5 @@ export const config = parsed.success
       AGMARKNET_RESOURCE_ID: process.env.AGMARKNET_RESOURCE_ID || "9ef84268-d588-465a-a308-a864a43d0070",
       GOOGLE_MAPS_API_KEY: process.env.GOOGLE_MAPS_API_KEY || "",
       OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY || "",
-      OPENROUTER_MODEL: process.env.OPENROUTER_MODEL || "anthropic/claude-3-haiku",
+      OPENROUTER_MODEL: process.env.OPENROUTER_MODEL || "nvidia/nemotron-3-ultra-550b-a55b:free",
     };

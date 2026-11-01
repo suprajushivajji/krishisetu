@@ -14,6 +14,8 @@ import { predictionRouter } from "./routes/predictions";
 import { enquiryRouter } from "./routes/enquiries";
 import { voiceRouter } from "./routes/voice";
 import { adminRouter } from "./routes/admin";
+import { callsRouter } from "./routes/calls";
+import { appointmentsRouter } from "./routes/appointments";
 import { MandiPriceService } from "./services/mandi";
 
 export const app = express();
@@ -56,6 +58,8 @@ app.use("/api/v1/predictions", predictionRouter);
 app.use("/api/v1", priceRouter); // for /api/v1/fair-price/...
 app.use("/api/v1/enquiries", enquiryRouter);
 app.use("/api/v1/voice", voiceRouter);
+app.use("/api/v1/calls", callsRouter);
+app.use("/api/v1/appointments", appointmentsRouter);
 app.use("/api/v1/admin", adminRouter);
 
 // Base Health Check (public, no auth required)

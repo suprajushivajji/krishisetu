@@ -121,3 +121,5 @@ export const AuditLog =
 // Export additional models
 export { Market } from "./Market";
 export { CropPrediction } from "./CropPrediction";
+export { CallSession } from "./CallSession";
+export { Appointment } from "./Appointment";

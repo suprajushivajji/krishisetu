@@ -10,13 +10,22 @@ export class WavRecorder {
   private audioContext: AudioContext | null = null;
   private mediaStream: MediaStream | null = null;
   private processor: ScriptProcessorNode | null = null;
+  private silentGain: GainNode | null = null;
   private input: MediaStreamAudioSourceNode | null = null;
   private audioData: Float32Array[] = [];
   private sampleRate = 16000;
 
   public async start(): Promise<void> {
     this.audioData = [];
-    this.mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    // Echo cancellation + noise suppression stop the assistant's TTS (system
+    // audio from the speakers) from being captured as the user's answer.
+    this.mediaStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
 
     const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
     this.audioContext = new AudioContextClass({ sampleRate: this.sampleRate });
@@ -31,13 +40,23 @@ export class WavRecorder {
     };
 
     this.input.connect(this.processor);
-    this.processor.connect(this.audioContext.destination);
+    // ScriptProcessorNode only fires onaudioprocess when connected downstream,
+    // but connecting it straight to the speakers creates an echo/feedback loop.
+    // Route through a zero-gain node: graph stays alive, ZERO audio is output.
+    this.silentGain = this.audioContext.createGain();
+    this.silentGain.gain.value = 0;
+    this.processor.connect(this.silentGain);
+    this.silentGain.connect(this.audioContext.destination);
   }
 
   public async stop(): Promise<Blob> {
     if (this.processor && this.input) {
       this.input.disconnect();
       this.processor.disconnect();
+    }
+    if (this.silentGain) {
+      this.silentGain.disconnect();
+      this.silentGain = null;
     }
     if (this.mediaStream) {
       this.mediaStream.getTracks().forEach((t) => t.stop());

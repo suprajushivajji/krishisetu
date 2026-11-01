@@ -6,12 +6,16 @@ import { VoiceInteraction } from "../models/VoiceInteraction";
 import { MarketPrice } from "../models/MarketPrice";
 import { Business } from "../models/Business";
 import { BuyerOffer } from "../models/BuyerOffer";
-import { Market } from "../models/Market";
 import { authenticate, AuthenticatedRequest } from "../middleware/auth";
 import { calculateNetReturn } from "../utils/calculator";
-import { IntentRouter } from "../services/intentRouter";
-import { CropPredictionService } from "../services/cropPrediction";
-import { WeatherService } from "../services/weather";
+import {
+  localizedCrop,
+  localizedCropList,
+  localizedMoney,
+  normalizeVoiceLanguage,
+  numberWords,
+  findCropInTranscript,
+} from "../services/voiceLocalization";
 
 export const voiceRouter = Router();
 
@@ -36,13 +40,13 @@ const upload = multer({
 
 const speakSchema = z.object({
   text: z.string().min(1, "Text is required to synthesize"),
-  languageCode: z.string().default("kn-IN"),
+  languageCode: z.string().default("kn"),
   voiceGender: z.enum(["female", "male"]).default("female"),
 });
 
 const assistantSchema = z.object({
   transcript: z.string().min(1, "Transcript is required"),
-  languageCode: z.string().default("kn-IN"),
+  languageCode: z.string().default("kn"),
   district: z.string().default("Davanagere"),
 });
 
@@ -94,17 +98,6 @@ voiceRouter.post(
       });
     } catch (error: any) {
       console.error("❌ Voice transcribe error:", error);
-      
-      // Specific handling for 400 errors (likely audio format issues)
-      if (error?.response?.status === 400) {
-        res.status(400).json({
-          success: false,
-          message: "Audio format not supported by Gnani API. Please ensure audio is in WAV format (16kHz, mono, PCM).",
-          error: error?.response?.data?.message || error?.message,
-        });
-        return;
-      }
-      
       res.status(500).json({
         success: false,
         message: error.message || "Failed to transcribe audio",
@@ -119,7 +112,7 @@ voiceRouter.post(
  */
 voiceRouter.post("/speak", async (req: Request, res: Response): Promise<void> => {
   try {
-    const { text, languageCode = "kn-IN", voiceGender = "female" } = req.body;
+    const { text, languageCode = "kn", voiceGender = "female" } = req.body;
     if (!text) {
       res.status(400).json({ success: false, message: "Text to speak is required" });
       return;
@@ -129,7 +122,7 @@ voiceRouter.post("/speak", async (req: Request, res: Response): Promise<void> =>
       const result = await GnaniService.synthesize({
         text,
         languageCode,
-        voice: voiceGender === "male" ? "Girish" : "Nalini",
+        voiceGender,
       });
 
       res.set({
@@ -155,80 +148,142 @@ voiceRouter.post("/speak", async (req: Request, res: Response): Promise<void> =>
  */
 voiceRouter.post("/assistant", async (req: Request, res: Response): Promise<void> => {
   try {
-    const { transcript, languageCode = "kn-IN", district = "" } = req.body;
+    const { transcript, languageCode = "kn", district = "" } = req.body;
+    const responseLanguage = normalizeVoiceLanguage(languageCode);
+    const lower = (transcript || "").toLowerCase();
+    const isPriceQuery =
+      lower.includes("rate") ||
+      lower.includes("price") ||
+      lower.includes("कीमत") ||
+      lower.includes("भाव") ||
+      lower.includes("दाम") ||
+      lower.includes("ಬೆಲೆ") ||
+      lower.includes("ದರ") ||
+      lower.includes("ಭಾವ");
 
-    // Classify intent (now async to fetch crops from DB)
-    const intentResult = await IntentRouter.classify(transcript, district, "Karnataka");
+    const isBuyerQuery =
+      lower.includes("buyer") ||
+      lower.includes("kharidi") ||
+      lower.includes("ಖರೀದಿದಾರ") ||
+      lower.includes("ವ್ಯಾಪಾರಿ") ||
+      lower.includes("ಮಂಡಿ");
 
-    // Execute intent and retrieve data
-    const data = await IntentRouter.execute(intentResult);
+    const isEarningsQuery =
+      lower.includes("earnings") ||
+      lower.includes("calculate") ||
+      lower.includes("ಲಾಭ") ||
+      lower.includes("ಲೆಕ್ಕ");
 
-    // Generate response based on intent and data
+    const quantityMatch = lower.match(/(\d+(?:\.\d+)?)\s*(kg|ಕಿಲೋ|ಕೆಜಿ)/i);
+    const distanceMatch = lower.match(/(\d+(?:\.\d+)?)\s*(km|ಕಿಮೀ)/i);
+    const quantityKg = quantityMatch ? Number(quantityMatch[1]) : 500;
+    const distanceKm = distanceMatch ? Number(distanceMatch[1]) : 0;
+    const knownCrops = await MarketPrice.distinct("commodity");
+    const detectedCrop = findCropInTranscript(knownCrops, transcript || "");
+    const districtFilter = district ? { district: { $regex: new RegExp(String(district), "i") } } : {};
+    const cropFilter = detectedCrop ? { commodity: { $regex: new RegExp(String(detectedCrop), "i") } } : {};
+    const benchmark = detectedCrop
+      ? await MarketPrice.findOne({ ...cropFilter, ...districtFilter }).sort({ arrivalDate: -1 }) ||
+        await MarketPrice.findOne(cropFilter).sort({ arrivalDate: -1 })
+      : null;
+
+    let intent = "check_price";
     let answerText = "";
     let answerTextKannada = "";
+    let answerTextHindi = "";
+    let dataPayload: any = { crop: detectedCrop || null, district: district || null };
 
-    if (intentResult.intent === "clarification_required") {
-      const missingFields = intentResult.missingFields.join(" and ");
-      const availableCrops = await MarketPrice.distinct("commodity");
-      const cropList = availableCrops.slice(0, 8).join(", ");
-      answerText = `Please specify the ${missingFields}. Available crops: ${cropList}.`;
-      answerTextKannada = `ದಯವಿಟ್ಟು ${missingFields} ಅನ್ನು ಸ್ಪಷ್ಟವಾಗಿ ಹೇಳಿ. ಲಭ್ಯವಿರುವ ಬೆಳೆಗಳು: ${cropList}.`;
-    } else if (intentResult.intent === "crop_price") {
-      if (data.found) {
-        answerText = `${data.crop} is ₹${data.modalPricePerKg} per kg at ${data.market}, ${data.district}. Reported on ${new Date(data.arrivalDate).toLocaleDateString()}.`;
-        answerTextKannada = `${data.market}, ${data.district} ನಲ್ಲಿ ${data.crop} ಮಾದರಿ ದರ ಪ್ರತಿ ಕಿಲೋಗೆ ₹${data.modalPricePerKg}. ${new Date(data.arrivalDate).toLocaleDateString()} ರಂದು ವರದಿ.`;
+    if (!detectedCrop) {
+      answerText = `Please mention the crop you want to know about. I can answer for ${knownCrops.slice(0, 8).join(", ")}.`;
+      answerTextKannada = `ದಯವಿಟ್ಟು ಬೆಳೆಯ ಹೆಸರನ್ನು ಹೇಳಿ. ${localizedCropList(knownCrops.slice(0, 8), "kn")} ಬೆಳೆಗಳ ಬಗ್ಗೆ ನಾನು ಮಾಹಿತಿ ನೀಡಬಹುದು.`;
+      answerTextHindi = `कृपया फसल का नाम बताइए। मैं ${localizedCropList(knownCrops.slice(0, 8), "hi")} के बारे में जानकारी दे सकता हूँ।`;
+    } else if (isBuyerQuery) {
+      intent = "find_buyers";
+      const buyerFilter: any = { cropsPurchased: { $regex: new RegExp(detectedCrop, "i") }, isActive: true };
+      if (district) buyerFilter.$or = [{ district: { $regex: new RegExp(district, "i") } }, { serviceDistricts: district }, { serviceCoverage: "statewide" }];
+      const businesses = await Business.find(buyerFilter).limit(5);
+      dataPayload = { ...dataPayload, buyersCount: businesses.length, buyers: businesses.map((business) => ({ name: business.businessName, phone: business.phone, district: business.district })) };
+      answerText = businesses.length > 0
+        ? `Found ${businesses.length} active buyers for ${detectedCrop}${district ? ` near ${district}` : ""}. The first listed buyer is ${businesses[0].businessName}.`
+        : `No active buyer listing was found for ${detectedCrop}${district ? ` in ${district}` : ""}. Try widening the district search or register a buyer offer.`;
+      answerTextKannada = businesses.length > 0
+        ? `${detectedCrop} ಖರೀದಿಸುವ ${businesses.length} ಸಕ್ರಿಯ ವ್ಯಾಪಾರಿಗಳು ಲಭ್ಯವಿದ್ದಾರೆ. ಮೊದಲ ವ್ಯಾಪಾರಿ ${businesses[0].businessName}.`
+        : `${detectedCrop}ಗೆ ಸಕ್ರಿಯ ವ್ಯಾಪಾರಿ ಪಟ್ಟಿ ಸಿಗಲಿಲ್ಲ. ಹತ್ತಿರದ ಜಿಲ್ಲೆಗಳಲ್ಲಿ ಹುಡುಕಿ.`;
+      answerTextHindi = businesses.length > 0
+        ? `${detectedCrop} खरीदने वाले ${businesses.length} सक्रिय व्यापारी उपलब्ध हैं। पहला व्यापारी ${businesses[0].businessName} है।`
+        : `${detectedCrop} के लिए सक्रिय व्यापारी सूची नहीं मिली। पास के जिलों में खोजें।`;
+    } else if (isEarningsQuery) {
+      intent = "calculate_earnings";
+      if (!benchmark) {
+        answerText = `I could not find a current market price for ${detectedCrop}, so I will not invent an earnings estimate.`;
+        answerTextKannada = `${detectedCrop}ಗೆ ಪ್ರಸ್ತುತ ಮಾರುಕಟ್ಟೆ ದರ ಸಿಗಲಿಲ್ಲ. ಆದ್ದರಿಂದ ನಾನು ಅಂದಾಜು ಲಾಭವನ್ನು ಕಲ್ಪಿಸುವುದಿಲ್ಲ.`;
+        answerTextHindi = `${detectedCrop} के लिए वर्तमान बाज़ार भाव नहीं मिला, इसलिए मैं अनुमानित कमाई नहीं बताऊँगा।`;
       } else {
-        answerText = data.message || "No price record found for this crop.";
-        answerTextKannada = data.message || "ಈ ಬೆಳೆಗೆ ದರ ದಾಖಲೆ ಸಿಗಲಿಲ್ಲ.";
+        const calculation = calculateNetReturn({ pricePerKg: benchmark.modalPricePerKg, quantityKg, distanceKm, handlingCostPerKg: 1.2 });
+        dataPayload = { ...dataPayload, modalPricePerKg: benchmark.modalPricePerKg, calculation };
+        answerText = `For ${quantityKg} kg of ${detectedCrop} at the current modal price of ₹${benchmark.modalPricePerKg} per kg, estimated take-home is ₹${calculation.estimatedNetReturn}.`;
+        answerTextKannada = `${quantityKg} ಕಿಲೋ ${detectedCrop}ಗೆ ಪ್ರಸ್ತುತ ಮಾದರಿ ದರ ₹${benchmark.modalPricePerKg} ಪ್ರತಿ ಕಿಲೋ. ಅಂದಾಜು ನಿವ್ವಳ ಮೊತ್ತ ₹${calculation.estimatedNetReturn}.`;
+        answerTextHindi = `${quantityKg} किलो ${detectedCrop} के लिए वर्तमान मॉडल भाव ${benchmark.modalPricePerKg} रुपये प्रति किलो है। अनुमानित शुद्ध राशि ${calculation.estimatedNetReturn} रुपये है।`;
       }
-    } else if (intentResult.intent === "buyer_search") {
-      if (data.found) {
-        answerText = `Found ${data.count} active buyers. ${data.buyers[0]?.name} in ${data.buyers[0]?.district} is ${data.buyers[0]?.verified ? "verified" : "pending verification"}.`;
-        answerTextKannada = `${data.count} ಸಕ್ರಿಯ ಖರೀದಿದಾರರು ಲಭ್ಯವಿದ್ದಾರೆ. ${data.buyers[0]?.district} ನಲ್ಲಿ ${data.buyers[0]?.name}.`;
+    } else if (isPriceQuery || benchmark) {
+      intent = "check_price";
+      if (!benchmark) {
+        answerText = `No current market record was found for ${detectedCrop}.`;
+        answerTextKannada = `${detectedCrop}ಗೆ ಪ್ರಸ್ತುತ ಮಾರುಕಟ್ಟೆ ದಾಖಲೆ ಸಿಗಲಿಲ್ಲ.`;
+        answerTextHindi = `${detectedCrop} के लिए वर्तमान बाज़ार रिकॉर्ड नहीं मिला।`;
       } else {
-        answerText = "No active buyers found for this crop in your area.";
-        answerTextKannada = "ಈ ಬೆಳೆಗೆ ನಿಮ್ಮ ಪ್ರದೇಶದಲ್ಲಿ ಸಕ್ರಿಯ ಖರೀದಿದಾರರು ಸಿಗಲಿಲ್ಲ.";
+        const minimum = (benchmark.minPrice / 100).toFixed(2);
+        const maximum = (benchmark.maxPrice / 100).toFixed(2);
+        dataPayload = { ...dataPayload, modalPricePerKg: benchmark.modalPricePerKg, market: benchmark.market, date: benchmark.arrivalDate };
+        answerText = `${detectedCrop} is ₹${benchmark.modalPricePerKg} per kg at ${benchmark.market}. The reported range is ₹${minimum} to ₹${maximum} per kg.`;
+        answerTextKannada = `${benchmark.market} ನಲ್ಲಿ ${detectedCrop} ಮಾದರಿ ದರ ಪ್ರತಿ ಕಿಲೋಗೆ ₹${benchmark.modalPricePerKg}. ವರದಿ ದರ ₹${minimum} ರಿಂದ ₹${maximum} ಪ್ರತಿ ಕಿಲೋ.`;
+        answerTextHindi = `${benchmark.market} में ${detectedCrop} का मॉडल भाव ${benchmark.modalPricePerKg} रुपये प्रति किलो है। रिपोर्ट किया गया भाव ${minimum} से ${maximum} रुपये प्रति किलो है।`;
       }
-    } else if (intentResult.intent === "net_return_calculation") {
-      if (data.calculation) {
-        const cropUsed = data.cropUsed || data.priceData?.crop || "crop";
-        answerText = `For ${data.quantityKg} kg of ${cropUsed} at ₹${data.priceData.modalPricePerKg}/kg, estimated take-home is ₹${data.calculation.estimatedNetReturn}.`;
-        answerTextKannada = `${data.quantityKg} ಕಿಲೋ ${cropUsed}ಗೆ ₹${data.priceData.modalPricePerKg}/kg ದರದಲ್ಲಿ, ಅಂದಾಜು ನಿವ್ವಳ: ₹${data.calculation.estimatedNetReturn}.`;
+    }
+
+    const localizedName = localizedCrop(detectedCrop || "", responseLanguage);
+    let localizedResponse = answerText;
+    if (responseLanguage === "kn") {
+      if (!detectedCrop) {
+        localizedResponse = answerTextKannada;
+      } else if (intent === "find_buyers") {
+        const buyersCount = Number(dataPayload.buyersCount || 0);
+        localizedResponse = dataPayload.buyersCount > 0
+          ? `${localizedName} ಖರೀದಿಸುವ ${numberWords(buyersCount, "kn")} ಸಕ್ರಿಯ ವ್ಯಾಪಾರಿಗಳು ಲಭ್ಯವಿದ್ದಾರೆ. ಮೊದಲ ವ್ಯಾಪಾರಿ ${dataPayload.buyers?.[0]?.name || ""}.`
+          : `${localizedName}ಗೆ ಸಕ್ರಿಯ ವ್ಯಾಪಾರಿ ಪಟ್ಟಿ ಸಿಗಲಿಲ್ಲ. ಹತ್ತಿರದ ಜಿಲ್ಲೆಗಳಲ್ಲಿ ಹುಡುಕಿ.`;
+      } else if (intent === "calculate_earnings" && benchmark) {
+        localizedResponse = `${numberWords(quantityKg, "kn")} ಕಿಲೋಗ್ರಾಂ ${localizedName}ಗೆ ಪ್ರಸ್ತುತ ಮಾದರಿ ದರ ${localizedMoney(benchmark.modalPricePerKg, "kn")} ಪ್ರತಿ ಕಿಲೋಗ್ರಾಂ. ಅಂದಾಜು ನಿವ್ವಳ ಮೊತ್ತ ${localizedMoney(dataPayload.calculation.estimatedNetReturn, "kn")}.`;
+      } else if (benchmark) {
+        localizedResponse = `${benchmark.market} ನಲ್ಲಿ ${localizedName} ಮಾದರಿ ದರ ಪ್ರತಿ ಕಿಲೋಗ್ರಾಂಗೆ ${localizedMoney(benchmark.modalPricePerKg, "kn")}. ವರದಿ ದರ ${localizedMoney(Number((benchmark.minPrice / 100).toFixed(2)), "kn")} ರಿಂದ ${localizedMoney(Number((benchmark.maxPrice / 100).toFixed(2)), "kn")} ಪ್ರತಿ ಕಿಲೋಗ್ರಾಂ.`;
       } else {
-        answerText = data.error || "Cannot calculate without current price data.";
-        answerTextKannada = data.error || "ಪ್ರಸ್ತುತ ದರ ದತ್ತಾಂಶವಿಲ್ಲದೆ ಲೆಕ್ಕ ಮಾಡಲು ಸಾಧ್ಯವಿಲ್ಲ.";
+        localizedResponse = answerTextKannada.replace(detectedCrop, localizedName);
       }
-    } else if (intentResult.intent === "crop_price_prediction") {
-      if (data.sufficiencyStatus === "insufficient") {
-        answerText = `Insufficient historical data for prediction. Only ${data.availableObservations} observations available. Current price: ₹${data.lastObservedPrice}/kg from ${new Date(data.lastObservedDate).toLocaleDateString()}.`;
-        answerTextKannada = `ಊಹೆಗೆ ಅಸಮರ್ಪಕ ಐತಿಹಾಸಿಕ ದತ್ತಾಂಶ. ಕೇವಲ ${data.availableObservations} ವೀಕ್ಷಣಗಳು. ಪ್ರಸ್ತುತ ದರ: ₹${data.lastObservedPrice}/kg.`;
+    } else if (responseLanguage === "hi") {
+      if (!detectedCrop) {
+        localizedResponse = answerTextHindi;
+      } else if (intent === "find_buyers") {
+        const buyersCount = Number(dataPayload.buyersCount || 0);
+        localizedResponse = dataPayload.buyersCount > 0
+          ? `${localizedName} खरीदने वाले ${numberWords(buyersCount, "hi")} सक्रिय व्यापारी उपलब्ध हैं। पहला व्यापारी ${dataPayload.buyers?.[0]?.name || ""} है।`
+          : `${localizedName} के लिए सक्रिय व्यापारी सूची नहीं मिली। पास के जिलों में खोजें।`;
+      } else if (intent === "calculate_earnings" && benchmark) {
+        localizedResponse = `${numberWords(quantityKg, "hi")} किलोग्राम ${localizedName} के लिए वर्तमान मॉडल भाव ${localizedMoney(benchmark.modalPricePerKg, "hi")} प्रति किलोग्राम है। अनुमानित शुद्ध राशि ${localizedMoney(dataPayload.calculation.estimatedNetReturn, "hi")} है।`;
+      } else if (benchmark) {
+        localizedResponse = `${benchmark.market} में ${localizedName} का मॉडल भाव ${localizedMoney(benchmark.modalPricePerKg, "hi")} प्रति किलोग्राम है। रिपोर्ट किया गया भाव ${localizedMoney(Number((benchmark.minPrice / 100).toFixed(2)), "hi")} से ${localizedMoney(Number((benchmark.maxPrice / 100).toFixed(2)), "hi")} प्रति किलोग्राम है।`;
       } else {
-        answerText = `Based on historical data, forecast is ₹${data.forecastValue}/kg for next ${data.forecastHorizon} days. ${data.limitations.join(". ")}`;
-        answerTextKannada = `ಐತಿಹಾಸಿಕ ದತ್ತಾಂಶದ ಆಧಾರದ ಮೇಲೆ, ಮುಂದಿನ ${data.forecastHorizon} ದಿನಗಳಿಗೆ ₹${data.forecastValue}/kg ಊಹೆ.`;
+        localizedResponse = answerTextHindi.replace(detectedCrop, localizedName);
       }
-    } else if (intentResult.intent === "weather_forecast") {
-      if (data.sufficiencyStatus === "insufficient") {
-        answerText = "Weather service not yet configured.";
-        answerTextKannada = "ಹವಾಮಾನ ಸೇವೆ ಇನ್ನೂ ಸಂರಚಿಸಲಾಗಿಲ್ಲ.";
-      } else {
-        answerText = `Current temperature: ${data.current.temperature}°C. ${data.current.description}.`;
-        answerTextKannada = `ಪ್ರಸ್ತುತ ತಾಪಮಾನ: ${data.current.temperature}°C. ${data.current.description}.`;
-      }
-    } else {
-      answerText = "I can help with crop prices, buyer search, earnings calculation, and more. Please ask a specific question.";
-      answerTextKannada = "ನಾನು ಬೆಳೆ ದರಗಳು, ಖರೀದಿದಾರರು, ಲಾಭದ ಲೆಕ್ಕಾಚಾರ ಮುಂತಾದವುಗಳಲ್ಲಿ ಸಹಾಯ ಮಾಡಬಹುದು. ದಯವಿಟ್ಟು ನಿರ್ದಿಷ್ಟ ಪ್ರಶ್ನೆ ಕೇಳಿ.";
     }
 
     res.status(200).json({
       success: true,
       transcript,
-      intent: intentResult.intent,
-      confidence: intentResult.confidence,
-      response: languageCode === "kn-IN" ? answerTextKannada : answerText,
+      intent,
+      response: localizedResponse,
       responseEnglish: answerText,
       responseKannada: answerTextKannada,
-      data,
-      intentResult,
+      responseHindi: answerTextHindi,
+      data: dataPayload,
     });
   } catch (error: any) {
     console.error("❌ Voice assistant error:", error);
