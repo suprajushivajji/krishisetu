@@ -32,6 +32,7 @@ import {
   normalizeSpokenDigits,
   normalizeQuantity,
   normalizeFieldValue,
+  extractTextAnswer,
   matchCrops,
   matchCategory,
 } from "../src/lib/registrationNormalization";
@@ -94,6 +95,30 @@ async function main() {
     assert.deepEqual((updates.find((u) => u.fieldId === "selectedCrops")?.value as string[]).sort(), ["Onion", "Tomato"]);
     assert.equal(updates.find((u) => u.fieldId === "phone")?.value, "9845012345");
     assert.equal(updates.find((u) => u.fieldId === "category")?.value, "wholesaler");
+  });
+
+  // 3b. Free-text answers keep only the requested answer
+  await ok("3b. Free-text field prefixes are removed", () => {
+    assert.equal(
+      extractTextAnswer("contactPerson", "contact person's name is Supraj"),
+      "Supraj"
+    );
+    assert.equal(
+      extractTextAnswer("businessName", "my business name: Bengaluru APMC"),
+      "Bengaluru APMC"
+    );
+    assert.equal(
+      extractTextAnswer("businessName", "the business name is bengaluru apmc"),
+      "bengaluru apmc"
+    );
+    assert.equal(
+      extractTextAnswer(
+        "contactPerson",
+        "the contact person name is supraj the contact person name is supraj"
+      ),
+      "supraj"
+    );
+    assert.equal(extractTextAnswer("contactPerson", "Supraj"), "Supraj");
   });
 
   // 4. Invalid phone/email + spoken digits

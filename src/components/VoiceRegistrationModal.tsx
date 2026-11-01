@@ -10,7 +10,7 @@ import {
   type RegistrationFormState,
   type RegistrationLanguage,
 } from "@/lib/registrationSchema";
-import { deterministicExtract } from "@/lib/registrationNormalization";
+import { deterministicExtract, extractTextAnswer } from "@/lib/registrationNormalization";
 import {
   RegistrationConversationMachine,
   reviewDisplayValue,
@@ -299,8 +299,12 @@ export function VoiceRegistrationModal({
     recognized: string
   ): { fieldId: string; value: unknown }[] {
     const current = machine.currentFieldId;
-    if (current && FIELD_DEFINITIONS[current]?.type === "text" && !updates.some((u) => u.fieldId === current)) {
-      const cleaned = recognized.trim();
+    if (current && FIELD_DEFINITIONS[current]?.type === "text") {
+      const cleaned = extractTextAnswer(current, recognized);
+      const existingIndex = updates.findIndex((u) => u.fieldId === current);
+      if (existingIndex >= 0 && cleaned) {
+        return updates.map((update, index) => index === existingIndex ? { ...update, value: cleaned } : update);
+      }
       if (cleaned) return [...updates, { fieldId: current, value: cleaned }];
     }
     return updates;
@@ -313,7 +317,12 @@ export function VoiceRegistrationModal({
     setBusy(true);
     const current = machine.currentFieldId;
     const proposed = deterministicExtract(text, lang, machine.formState);
-    if (current && proposed.every((p) => p.fieldId !== current)) {
+    if (current && FIELD_DEFINITIONS[current]?.type === "text") {
+      const answer = extractTextAnswer(current, text);
+      const existing = proposed.find((p) => p.fieldId === current);
+      if (existing) existing.value = answer;
+      else if (answer) proposed.push({ fieldId: current, value: answer });
+    } else if (current && proposed.every((p) => p.fieldId !== current)) {
       proposed.push({ fieldId: current, value: text });
     }
     const result = machine.processAnswer(text, proposed, "typed");
@@ -578,7 +587,9 @@ function ModalHeader({ title, onClose, step }: { title: string; onClose: () => v
 }
 
 function FilledSoFar({ machine, lang, onEdit }: { machine: RegistrationConversationMachine; lang: RegistrationLanguage; onEdit: (id: string) => void }) {
-  const filledIds = [...machine.answered].filter((id) => id !== "longitude");
+  const filledIds = [...machine.answered].filter(
+    (id) => id !== "longitude" && reviewDisplayValue(id, machine.formState, lang).trim()
+  );
   if (filledIds.length === 0) return null;
   return (
     <div className="voice-filled-box">

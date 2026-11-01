@@ -305,12 +305,40 @@ export function normalizeFieldValue(fieldId: string, rawValue: unknown, _state: 
     case "state":
     case "paymentTerms":
     case "description": {
-      const cleaned = asText.trim();
+      const cleaned = extractTextAnswer(fieldId, asText);
       return cleaned.length > 0 ? cleaned : null;
     }
     default:
       return null;
   }
+}
+
+/**
+ * Extract the answer portion from a spoken/typed response to a free-text
+ * question. This prevents phrases such as "contact person's name is Supraj"
+ * from being stored as the contact person's name.
+ */
+export function extractTextAnswer(fieldId: string, transcript: string): string {
+  const text = transcript.trim().replace(/\s+/g, " ");
+  if (!text) return "";
+
+  const labels: Record<string, string> = {
+    businessName: "business\\s+name",
+    contactPerson: "contact\\s+person(?:'s)?(?:\\s+name)?|contact\\s+name",
+    address: "business\\s+address|address",
+    taluk: "taluk|taluka",
+    locality: "locality|yard",
+    paymentTerms: "payment\\s+terms?",
+    description: "description|business\\s+description",
+  };
+  const label = labels[fieldId];
+  if (!label) return text;
+
+  const matches = [...text.matchAll(new RegExp(
+    `(?:^|\\s)(?:(?:the|my|your)\\s+)?(?:${label})\\s*(?:is|are|:|-)?\\s+(.+?)(?=\\s+(?:(?:the|my|your)\\s+)?(?:${label})\\s*(?:is|are|:|-)?\\s+|$)`,
+    "gi"
+  ))];
+  return (matches.at(-1)?.[1] || text).trim();
 }
 
 /**
